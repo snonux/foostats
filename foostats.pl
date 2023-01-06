@@ -25,7 +25,7 @@ package Foostats::Tokenizer {
     return ($ip_hash, $ip_proto);
   }
 
-  sub read_lines ($glob, $callback) {
+  sub read_lines ($glob, $callback, $skip_first_line = 1) {
     my sub open_file ($path) {
       my $flag = $path =~ /\.gz$/ ? '<:gzip' : '<';
       open my $file, $flag, $path or die $!;
@@ -34,6 +34,7 @@ package Foostats::Tokenizer {
 
     for my $path (glob $glob) {
       my $file = open_file $path;
+      <$file> if $skip_first_line; # Contains 'logfile turned over' newsyslog message.
       $callback->($path, split / +/) while <$file>;
       close $file;
     }
@@ -41,19 +42,20 @@ package Foostats::Tokenizer {
 
   sub parse_www_logs ($callback) {
     my sub parse_date ($date) {
-      eval {
-        Time::Piece->strptime($date, '[%d/%b/%Y:%H:%M:%S')->strftime('%Y-%m-%d')
-      }
+      my $t = Time::Piece->strptime($date, '[%d/%b/%Y:%H:%M:%S');
+      ($t->strftime('%Y-%m-%d'), $t->strftime('%H:%M:%S'));
     }
 
     my sub parse_line (@line) {
       my ($ip_hash, $ip_proto) = anonymize_ip $line[1];
+      my ($date, $time) = parse_date $line[4];
       {
         proto => 'http/s',
         host => $line[0],
         ip_hash => $ip_hash,
         ip_proto => $ip_proto,
-        date => parse_date($line[4]),
+        date => $date,
+        time => $time,
         uripath => $line[7],
         status => $line[9],
       }
