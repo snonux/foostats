@@ -13,11 +13,10 @@ package Foostats::Tokenizer {
   };
 
   use Data::Dumper;
-  use Time::Piece;
   use Digest::SHA3 'sha3_512_base64';
+  use File::stat;
   use PerlIO::gzip;
   use Time::Piece;
-  use File::stat;
 
   sub anonymize_ip ($ip) {
     my $ip_proto = (index $ip, ':') == -1 ? 'ipv4' : 'ipv6';
