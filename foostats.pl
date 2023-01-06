@@ -26,6 +26,10 @@ package Foostats::Tokenizer {
   }
 
   sub read_lines ($glob, $callback, $skip_first_line = 1) {
+    my sub year ($path) {
+      localtime( stat($path)->mtime )->strftime('%Y')
+    }
+
     my sub open_file ($path) {
       my $flag = $path =~ /\.gz$/ ? '<:gzip' : '<';
       open my $file, $flag, $path or die $!;
@@ -34,8 +38,9 @@ package Foostats::Tokenizer {
 
     for my $path (glob $glob) {
       my $file = open_file $path;
+      my $year = year $file;
       <$file> if $skip_first_line; # Contains 'logfile turned over' newsyslog message.
-      $callback->($path, split / +/) while <$file>;
+      $callback->($year, split / +/) while <$file>;
       close $file;
     }
   }
@@ -61,16 +66,12 @@ package Foostats::Tokenizer {
       }
     }
 
-    read_lines WWW_LOGS_GLOB, sub ($logfile_path, @line) {
+    read_lines WWW_LOGS_GLOB, sub ($year, @line) {
       $callback->(parse_line @line);
     };
   }
 
   sub parse_gemini_logs ($callback) {
-    my sub year ($logfile_path) {
-      localtime( stat($logfile_path)->mtime )->strftime('%Y')
-    }
-
     my sub parse_date ($year, @line) {
       my $timestr = "$year $line[0] $line[1]";
       Time::Piece->strptime($timestr, '%Y %b %d')->strftime('%Y-%m-%d');
@@ -103,19 +104,17 @@ package Foostats::Tokenizer {
 
     # Expect one vger and one relayd log line per event! So collect
     # both events (one from one log line each) and then merge the result hash!
-    my ($vger, $relayd) = ({}, {});
-    read_lines GEMINI_LOGS_GLOB, sub ($logfile_path, @line) {
-      my $year = year $logfile_path;
-
+    my ($vger, $relayd);
+    read_lines GEMINI_LOGS_GLOB, sub ($year, @line) {
       if ($line[4] eq 'vger:') {
         $vger = parse_vger_line $year, @line;
       } elsif ($line[5] eq 'relay' and index($line[6], 'gemini') == 0) {
         $relayd = parse_relayd_line $year, @line;
       }
 
-      if (%$vger and %$relayd and $vger->{time} eq $relayd->{time}) {
+      if (defined $vger and defined $relayd and $vger->{time} eq $relayd->{time}) {
         $callback->({ %$vger, %$relayd });
-        $vger = $relayd = {};
+        $vger = $relayd = undef;
       }
     };
   }
