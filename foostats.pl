@@ -3,14 +3,53 @@
 use v5.32;
 use strict;
 use warnings;
-use feature 'signatures';
-no warnings 'experimental::signatures';
+#use diagnostics;
+use feature qw(signatures refaliasing);
+no warnings qw(experimental::signatures);
 
-package Foostats::Tokenizer {
+package Str {
+  sub contains ($x, $y) { -1 != index $x, $y }
+  sub starts_with ($x, $y) { 0 == index $x, $y }
+}
+
+package Foostats::Aggregator {
+  our @ISA = qw(Foostats);
+
+  use Data::Dumper;
+
   use constant {
-    GEMINI_LOGS_GLOB => '/var/log/daemon*',
-    WWW_LOGS_GLOB => '/var/www/logs/access.log*',
+    FEED_URI => '/gemfeed/atom.xml',
   };
+
+  sub new ($class) {
+    bless {}, $class;
+  }
+
+  sub add ($self, $event) {
+    my $date = $event->{date};
+    $self->add_count($event, $date);
+    $self->dump;
+  }
+
+  sub add_count ($self, $event, $date) {
+    $self->{$date} //= { 'count' => {} };
+    \my $e = \$event;
+    \my $d = \$self->{$date}{count};
+    ($d->{$e->{proto}} //= 0)++;
+    ($d->{$e->{ip_proto}} //= 0)++;
+    ($d->{$e->{proto}.' '.$e->{ip_proto}} //= 0)++;
+    if (Str::contains $e->{uripath}, FEED_URI) {
+      ($d->{$e->{feed}} //= 0)++;
+    }
+  }
+
+  sub dump ($self) {
+    say Dumper $self
+  }
+}
+
+package Foostats::Logreader {
+  our @ISA = qw(Foostats);
 
   use Data::Dumper;
   use Digest::SHA3 'sha3_512_base64';
@@ -18,15 +57,20 @@ package Foostats::Tokenizer {
   use PerlIO::gzip;
   use Time::Piece;
 
+  use constant {
+    GEMINI_LOGS_GLOB => '/var/log/daemon*',
+    WWW_LOGS_GLOB => '/var/www/logs/access.log*',
+  };
+
   sub anonymize_ip ($ip) {
-    my $ip_proto = (index $ip, ':') == -1 ? 'ipv4' : 'ipv6';
+    my $ip_proto = (Str::contains $ip, ':') ? 'IPv6' : 'IPv4';
     my $ip_hash = sha3_512_base64 $ip;
     return ($ip_hash, $ip_proto);
   }
 
-  sub read_lines ($glob, $callback, $skip_first_line = 1) {
+  sub read_lines ($glob, $callback) {
     my sub year ($path) {
-      localtime( stat($path)->mtime )->strftime('%Y')
+      localtime( (stat $path)->mtime )->strftime('%Y')
     }
 
     my sub open_file ($path) {
@@ -38,8 +82,9 @@ package Foostats::Tokenizer {
     for my $path (glob $glob) {
       my $file = open_file $path;
       my $year = year $file;
-      <$file> if $skip_first_line; # Contains 'logfile turned over' newsyslog message.
-      $callback->($year, split / +/) while <$file>;
+      while (<$file>) {
+        $callback->($year, split / +/) unless Str::contains $_, 'logfile turned over';
+      }
       close $file;
     }
   }
@@ -72,8 +117,8 @@ package Foostats::Tokenizer {
 
   sub parse_gemini_logs ($callback) {
     my sub parse_date ($year, @line) {
-      my $timestr = "$year $line[0] $line[1]";
-      Time::Piece->strptime($timestr, '%Y %b %d')->strftime('%Y-%m-%d');
+      my $timestr = "$line[0] $line[1]";
+      Time::Piece->strptime($timestr, '%b %d')->strftime("$year-%m-%d");
     }
 
     my sub parse_vger_line ($year, @line) {
@@ -107,7 +152,7 @@ package Foostats::Tokenizer {
     read_lines GEMINI_LOGS_GLOB, sub ($year, @line) {
       if ($line[4] eq 'vger:') {
         $vger = parse_vger_line $year, @line;
-      } elsif ($line[5] eq 'relay' and index($line[6], 'gemini') == 0) {
+      } elsif ($line[5] eq 'relay' and Str::starts_with $line[6], 'gemini') {
         $relayd = parse_relayd_line $year, @line;
       }
 
@@ -119,9 +164,13 @@ package Foostats::Tokenizer {
   }
 
   sub parse_logs {
-    my sub foo { say Dumper @_ };
+    my $agg = Foostats::Aggregator->new();
+    my sub foo ($event) { $agg->add($event); }
+
     parse_www_logs \&foo;
     parse_gemini_logs \&foo;
+
+    say Dumper $agg;
   }
 
   parse_logs;
