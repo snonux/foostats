@@ -12,9 +12,66 @@ package Str {
   sub starts_with ($x, $y) { 0 == index $x, $y }
 }
 
-package Foostats::Aggregator {
-  our @ISA = qw(Foostats);
+package Foostats::Filter {
+  use Data::Dumper;
 
+  sub new ($class) {
+    bless {
+      odds => [qw(
+        .php wordpress /wp .asp .. robots.txt .env + % HNAP1 /admin
+        .git microsoft.exchange .lua /owa/
+      )]
+    }, $class;
+  }
+
+  sub ok ($self, $event) {
+    state %blocked = ();
+    return 0 if exists $blocked{$event->{ip_hash}};
+
+    if ($self->odd($event) or $self->excessive($event)) {
+      ($blocked{$event->{ip_hash}} //= 0)++;
+      return 0;
+
+    } else {
+      return 1;
+    }
+  }
+
+  sub odd ($self, $event) {
+    \my $uri_path = \$event->{uri_path};
+
+    for ($self->{odds}->@*) {
+      if (Str::contains $uri_path, $_) {
+        say "$uri_path contains $_ and is odd and will therefore be blocked!";
+        return 1;
+      }
+    }
+    return 0;
+  }
+
+  sub excessive ($self, $event) {
+    \my $time = \$event->{time};
+    \my $ip_hash = \$event->{ip_hash};
+
+    state $last_time = $time; # Time with second: 'HH:MM:SS'
+    state %count = (); # IPs accessing within the same second!
+
+    if ($last_time ne $time) {
+      $last_time = $time;
+      %count = ();
+      return 0;
+    }
+
+    # IP requested site more than once within the same second!?
+    if (1 < ++($count{$ip_hash} //= 0)) {
+      say "$ip_hash blocked due to excessive requesting...";
+      return 1;
+    }
+    return 0;
+  }
+}
+
+package Foostats::Aggregator {
   use Data::Dumper;
 
   use constant {
@@ -22,7 +79,7 @@ package Foostats::Aggregator {
   };
 
   sub new ($class) {
-    bless {}, $class;
+    bless { filter => Foostats::Filter->new }, $class;
   }
 
   sub add ($self, $event) {
@@ -32,14 +89,25 @@ package Foostats::Aggregator {
   }
 
   sub add_count ($self, $event, $date) {
-    $self->{$date} //= { 'count' => {} };
+    $self->{$date} //= { count => { filtered => 0 }, feed_ips => {} };
     \my $e = \$event;
-    \my $d = \$self->{$date}{count};
-    ($d->{$e->{proto}} //= 0)++;
-    ($d->{$e->{ip_proto}} //= 0)++;
-    ($d->{$e->{proto}.' '.$e->{ip_proto}} //= 0)++;
-    if (Str::contains $e->{uripath}, FEED_URI) {
-      ($d->{$e->{feed}} //= 0)++;
+
+    unless ($self->{filter}->ok($event)) {
+      $self->{$date}{count}{filtered}++;
+      return;
+    }
+
+    \my $c = \$self->{$date}{count};
+    \my $f = \$self->{$date}{feed_ips};
+
+    ($c->{$e->{proto}} //= 0)++;
+    ($c->{$e->{ip_proto}} //= 0)++;
+    ($c->{$e->{proto}.' '.$e->{ip_proto}} //= 0)++;
+
+    if (Str::contains $e->{uri_path}, FEED_URI) {
+      ($c->{feed} //= 0)++;
+      ($f->{$e->{ip_hash}} //= 0)++;
+      $c->{feed_uniq} = scalar keys %$f;
     }
   }
 
@@ -49,8 +117,6 @@ package Foostats::Aggregator {
 }
 
 package Foostats::Logreader {
-  our @ISA = qw(Foostats);
-
   use Data::Dumper;
   use Digest::SHA3 'sha3_512_base64';
   use File::stat;
@@ -105,7 +171,7 @@ package Foostats::Logreader {
         ip_proto => $ip_proto,
         date => $date,
         time => $time,
-        uripath => $line[7],
+        uri_path => $line[7],
         status => $line[9],
       }
     }
@@ -124,12 +190,12 @@ package Foostats::Logreader {
     my sub parse_vger_line ($year, @line) {
       my $full_path = $line[5];
       $full_path =~ s/"//g;
-      my ($proto, undef, $host, $uripath) = split '/', $full_path, 4;
-      $uripath = '' unless defined $uripath;
+      my ($proto, undef, $host, $uri_path) = split '/', $full_path, 4;
+      $uri_path = '' unless defined $uri_path;
       {
         proto => 'gemini',
         host => $host,
-        uripath => "/$uripath",
+        uri_path => "/$uri_path",
         status => $line[6],
         date => parse_date($year, @line),
         time => $line[2],
@@ -164,7 +230,8 @@ package Foostats::Logreader {
   }
 
   sub parse_logs {
-    my $agg = Foostats::Aggregator->new();
+    my $agg = Foostats::Aggregator->new;
+
     my sub foo ($event) { $agg->add($event); }
 
     parse_www_logs \&foo;
