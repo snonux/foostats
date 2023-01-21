@@ -49,6 +49,8 @@ package Foostats::Filter {
     return 0;
   }
 
+  # TODO: Only filter exessive calls to .gmi and/or .html content files!
+  # This is because a single page can refer to multiple images!
   sub excessive ($self, $event) {
     \my $time = \$event->{time};
     \my $ip_hash = \$event->{ip_hash};
@@ -75,44 +77,42 @@ package Foostats::Aggregator {
   use Data::Dumper;
 
   use constant {
-    FEED_URI => '/gemfeed/atom.xml',
+    ATOM_FEED_URI => '/gemfeed/atom.xml',
   };
 
   sub new ($class) {
-    bless { filter => Foostats::Filter->new }, $class;
+    bless { filter => Foostats::Filter->new, stats => {} }, $class;
   }
 
   sub add ($self, $event) {
     my $date = $event->{date};
     $self->add_count($event, $date);
-    $self->dump;
+    say Dumper $self->{stats};
   }
 
   sub add_count ($self, $event, $date) {
-    $self->{$date} //= { count => { filtered => 0 }, feed_ips => {} };
+    \my $s = \$self->{stats};
     \my $e = \$event;
 
+    $s->{$date} //= { count => { filtered => 0 }, feed_ips => {} };
+
     unless ($self->{filter}->ok($event)) {
-      $self->{$date}{count}{filtered}++;
+      $s->{$date}{count}{filtered}++;
       return;
     }
 
-    \my $c = \$self->{$date}{count};
-    \my $f = \$self->{$date}{feed_ips};
+    \my $c = \$s->{$date}{count};
+    \my $f = \$s->{$date}{feed_ips};
 
     ($c->{$e->{proto}} //= 0)++;
     ($c->{$e->{ip_proto}} //= 0)++;
     ($c->{$e->{proto}.' '.$e->{ip_proto}} //= 0)++;
 
-    if (Str::contains $e->{uri_path}, FEED_URI) {
-      ($c->{feed} //= 0)++;
+    if (Str::contains $e->{uri_path}, ATOM_FEED_URI) {
+      ($c->{atom_feed} //= 0)++;
       ($f->{$e->{ip_hash}} //= 0)++;
-      $c->{feed_uniq} = scalar keys %$f;
+      $c->{atom_feed_uniq} = scalar keys %$f;
     }
-  }
-
-  sub dump ($self) {
-    say Dumper $self
   }
 }
 
@@ -237,7 +237,7 @@ package Foostats::Logreader {
     parse_www_logs \&foo;
     parse_gemini_logs \&foo;
 
-    say Dumper $agg;
+    say Dumper $agg->{stats};
   }
 
   parse_logs;
