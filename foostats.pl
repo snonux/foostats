@@ -6,118 +6,15 @@ use warnings;
 #use diagnostics;
 use feature qw(signatures refaliasing);
 no warnings qw(experimental::signatures);
+use Data::Dumper;
 
 package Str {
   sub contains ($x, $y) { -1 != index $x, $y }
   sub starts_with ($x, $y) { 0 == index $x, $y }
-}
-
-package Foostats::Filter {
-  use Data::Dumper;
-
-  sub new ($class) {
-    bless {
-      odds => [qw(
-        .php wordpress /wp .asp .. robots.txt .env + % HNAP1 /admin
-        .git microsoft.exchange .lua /owa/
-      )]
-    }, $class;
-  }
-
-  sub ok ($self, $event) {
-    state %blocked = ();
-    return 0 if exists $blocked{$event->{ip_hash}};
-
-    if ($self->odd($event) or $self->excessive($event)) {
-      ($blocked{$event->{ip_hash}} //= 0)++;
-      return 0;
-
-    } else {
-      return 1;
-    }
-  }
-
-  sub odd ($self, $event) {
-    \my $uri_path = \$event->{uri_path};
-
-    for ($self->{odds}->@*) {
-      if (Str::contains $uri_path, $_) {
-        say "$uri_path contains $_ and is odd and will therefore be blocked!";
-        return 1;
-      }
-    }
-    return 0;
-  }
-
-  # TODO: Only filter exessive calls to .gmi and/or .html content files!
-  # This is because a single page can refer to multiple images!
-  sub excessive ($self, $event) {
-    \my $time = \$event->{time};
-    \my $ip_hash = \$event->{ip_hash};
-
-    state $last_time = $time; # Time with second: 'HH:MM:SS'
-    state %count = (); # IPs accessing within the same second!
-
-    if ($last_time ne $time) {
-      $last_time = $time;
-      %count = ();
-      return 0;
-    }
-
-    # IP requested site more than once within the same second!?
-    if (1 < ++($count{$ip_hash} //= 0)) {
-      say "$ip_hash blocked due to excessive requesting...";
-      return 1;
-    }
-    return 0;
-  }
-}
-
-package Foostats::Aggregator {
-  use Data::Dumper;
-
-  use constant {
-    ATOM_FEED_URI => '/gemfeed/atom.xml',
-  };
-
-  sub new ($class) {
-    bless { filter => Foostats::Filter->new, stats => {} }, $class;
-  }
-
-  sub add ($self, $event) {
-    my $date = $event->{date};
-    $self->add_count($event, $date);
-    say Dumper $self->{stats};
-  }
-
-  sub add_count ($self, $event, $date) {
-    \my $s = \$self->{stats};
-    \my $e = \$event;
-
-    $s->{$date} //= { count => { filtered => 0 }, feed_ips => {} };
-
-    unless ($self->{filter}->ok($event)) {
-      $s->{$date}{count}{filtered}++;
-      return;
-    }
-
-    \my $c = \$s->{$date}{count};
-    \my $f = \$s->{$date}{feed_ips};
-
-    ($c->{$e->{proto}} //= 0)++;
-    ($c->{$e->{ip_proto}} //= 0)++;
-    ($c->{$e->{proto}.' '.$e->{ip_proto}} //= 0)++;
-
-    if (Str::contains $e->{uri_path}, ATOM_FEED_URI) {
-      ($c->{atom_feed} //= 0)++;
-      ($f->{$e->{ip_hash}} //= 0)++;
-      $c->{atom_feed_uniq} = scalar keys %$f;
-    }
-  }
+  sub ends_with ($x, $y) { length($x) - length($y) == index($x, $y) }
 }
 
 package Foostats::Logreader {
-  use Data::Dumper;
   use Digest::SHA3 'sha3_512_base64';
   use File::stat;
   use PerlIO::gzip;
@@ -146,12 +43,15 @@ package Foostats::Logreader {
     }
 
     for my $path (glob $glob) {
+      say "Opening $path";
       my $file = open_file $path;
       my $year = year $file;
       while (<$file>) {
         $callback->($year, split / +/) unless Str::contains $_, 'logfile turned over';
       }
+      say "Closing $path";
       close $file;
+      # last; # DEBUGGING ONLY TODO UNDO THIS;
     }
   }
 
@@ -234,11 +134,157 @@ package Foostats::Logreader {
 
     my sub foo ($event) { $agg->add($event); }
 
+    say 'Parsing www logs';
     parse_www_logs \&foo;
+    say 'Parsing gemini logs';
     parse_gemini_logs \&foo;
 
-    say Dumper $agg->{stats};
+    return $agg->{stats};
+  }
+}
+
+package Foostats::Filter {
+  sub new ($class) {
+    bless {
+      odds => [qw(
+        .php wordpress /wp .asp .. robots.txt .env + % HNAP1 /admin
+        .git microsoft.exchange .lua /owa/
+      )]
+    }, $class;
   }
 
-  parse_logs;
+  sub ok ($self, $event) {
+    state %blocked = ();
+    return 0 if exists $blocked{$event->{ip_hash}};
+
+    if ($self->odd($event) or $self->excessive($event)) {
+      ($blocked{$event->{ip_hash}} //= 0)++;
+      return 0;
+
+    } else {
+      return 1;
+    }
+  }
+
+  sub odd ($self, $event) {
+    \my $uri_path = \$event->{uri_path};
+
+    for ($self->{odds}->@*) {
+      if (Str::contains $uri_path, $_) {
+        say STDERR "Warn: $uri_path contains $_ and is odd and will therefore be blocked!";
+        return 1;
+      }
+    }
+    return 0;
+  }
+
+  sub excessive ($self, $event) {
+    \my $time = \$event->{time};
+    \my $ip_hash = \$event->{ip_hash};
+
+    state $last_time = $time; # Time with second: 'HH:MM:SS'
+    state %count = (); # IPs accessing within the same second!
+
+    if ($last_time ne $time) {
+      $last_time = $time;
+      %count = ();
+      return 0;
+    }
+
+    # IP requested site more than once within the same second!?
+    if (1 < ++($count{$ip_hash} //= 0)) {
+      say STDERR "Warn: $ip_hash blocked due to excessive requesting...";
+      return 1;
+    }
+    return 0;
+  }
+}
+
+package Foostats::Aggregator {
+  use constant {
+    ATOM_FEED_URI => '/gemfeed/atom.xml',
+    GEMFEED_URI => '/gemfeed/index.gmi',
+    GEMFEED_URI_2 => '/gemfeed/',
+  };
+
+  sub new ($class) {
+    bless {
+      filter => Foostats::Filter->new,
+      stats => { by_date => {}, global => { notyetimplemented => 0 } },
+    }, $class;
+  }
+
+  sub add ($self, $event) {
+    my $date = $event->{date};
+    $self->add_count_by_date($event, $date);
+  }
+
+  sub add_count_by_date ($self, $event, $date) {
+    $self->{stats}{by_date}{$date} //= {
+      count => { filtered => 0 },
+      feed_ips => { atom_feed => {}, gemfeed => {} },
+    };
+
+    \my $s = \$self->{stats}{by_date}{$date};
+    \my $e = \$event;
+
+    unless ($self->{filter}->ok($event)) {
+      $s->{count}{filtered}++;
+      return;
+    }
+
+    \my $c = \$s->{count};
+    \my $f = \$s->{feed_ips};
+
+    ($c->{$e->{proto}} //= 0)++;
+    ($c->{$e->{ip_proto}} //= 0)++;
+    ($c->{$e->{proto}.' '.$e->{ip_proto}} //= 0)++;
+
+    if (Str::contains $e->{uri_path}, ATOM_FEED_URI) {
+      ($f->{atom_feed}->{$e->{ip_hash}} //= 0)++;
+    } elsif (Str::contains $e->{uri_path}, GEMFEED_URI) {
+      ($f->{gemfeed}->{$e->{ip_hash}} //= 0)++;
+    } elsif (Str::ends_with $e->{uri_path}, GEMFEED_URI_2) {
+      ($f->{gemfeed}->{$e->{ip_hash}} //= 0)++;
+    }
+
+    return $s;
+  }
+}
+
+package Foostats::Outputer {
+  sub new ($class, %args) {
+    bless \%args, $class;
+  }
+
+  sub write ($self) {
+    my $outfile = $self->{outdir} . '/stats.txt';
+    say "Writing $outfile";
+
+    say 'Unique feed subscribers:';
+    say $self->for_dates(\&_feed_ips);
+    say '';
+  }
+
+  sub for_dates ($self, $callback) {
+    say "$_: " . $callback->($self->{stats}{by_date}{$_})
+      for sort keys $self->{stats}->{by_date}->%*;
+  }
+
+  sub _feed_ips ($stats) {
+    my $atom_feed = scalar keys $stats->{feed_ips}->{atom_feed}->%*;
+    my $gemfeed = scalar keys $stats->{feed_ips}->{gemfeed}->%*;
+    sprintf "Atom: %2d, Gemfeed: %2d, Total: %2d",
+      $atom_feed, $gemfeed, $atom_feed + $gemfeed;
+  }
+}
+
+package main {
+  my $out = Foostats::Outputer->new(
+    stats => Foostats::Logreader::parse_logs,
+    outdir => '/tmp/',
+  );
+
+  #say Dumper $out;
+  $out->write;
 }
