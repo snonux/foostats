@@ -252,7 +252,7 @@ package Foostats::Aggregator {
   }
 }
 
-package Foostats::Outputer {
+package Foostats::Outputter {
   sub new ($class, %args) {
     bless \%args, $class;
   }
@@ -280,7 +280,7 @@ package Foostats::Outputer {
 }
 
 package main {
-  my $out = Foostats::Outputer->new(
+  my $out = Foostats::Outputter->new(
     stats => Foostats::Logreader::parse_logs,
     outdir => '/tmp/',
   );
