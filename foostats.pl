@@ -1,17 +1,28 @@
 #!/usr/bin/perl
 
-use v5.32;
+use v5.38;
 use strict;
 use warnings;
-#use diagnostics;
-use feature qw(signatures refaliasing);
-no warnings qw(experimental::signatures);
+#use diagnostics; # TODO: UNDO
+use feature qw(refaliasing);
+no warnings qw(experimental::refaliasing);
 use Data::Dumper;
 
+# TODO: Do i need to prefix Str:: ?
 package Str {
   sub contains ($x, $y) { -1 != index $x, $y }
   sub starts_with ($x, $y) { 0 == index $x, $y }
   sub ends_with ($x, $y) { length($x) - length($y) == index($x, $y) }
+}
+
+package TimeHelper {
+  use Time::Piece;
+  use Time::Seconds;
+
+  sub days_ago ($t) {
+    state $now = Time::Piece->new;
+    ($now - $t) / ONE_DAY;
+  }
 }
 
 package Foostats::Logreader {
@@ -19,6 +30,7 @@ package Foostats::Logreader {
   use File::stat;
   use PerlIO::gzip;
   use Time::Piece;
+  use Time::Seconds;
 
   use constant {
     GEMINI_LOGS_GLOB => '/var/log/daemon*',
@@ -38,8 +50,8 @@ package Foostats::Logreader {
 
     my sub open_file ($path) {
       my $flag = $path =~ /\.gz$/ ? '<:gzip' : '<';
-      open my $file, $flag, $path or die $!;
-      return $file;
+      open my $fd, $flag, $path or die "$path: $!";
+      return $fd;
     }
 
     for my $path (glob $glob) {
@@ -51,19 +63,19 @@ package Foostats::Logreader {
       }
       say "Closing $path";
       close $file;
-      # last; # DEBUGGING ONLY TODO UNDO THIS;
+      last; # DEBUGGING ONLY TODO UNDO THIS;
     }
   }
 
   sub parse_www_logs ($callback) {
     my sub parse_date ($date) {
       my $t = Time::Piece->strptime($date, '[%d/%b/%Y:%H:%M:%S');
-      ($t->strftime('%Y-%m-%d'), $t->strftime('%H:%M:%S'));
+      ($t->strftime('%Y-%m-%d'), $t->strftime('%H:%M:%S'), TimeHelper::days_ago $t);
     }
 
     my sub parse_line (@line) {
       my ($ip_hash, $ip_proto) = anonymize_ip $line[1];
-      my ($date, $time) = parse_date $line[4];
+      my ($date, $time, $days_ago) = parse_date $line[4];
       {
         proto => 'http/s',
         host => $line[0],
@@ -71,6 +83,7 @@ package Foostats::Logreader {
         ip_proto => $ip_proto,
         date => $date,
         time => $time,
+        days_ago => $days_ago,
         uri_path => $line[7],
         status => $line[9],
       }
@@ -84,7 +97,8 @@ package Foostats::Logreader {
   sub parse_gemini_logs ($callback) {
     my sub parse_date ($year, @line) {
       my $timestr = "$line[0] $line[1]";
-      Time::Piece->strptime($timestr, '%b %d')->strftime("$year-%m-%d");
+      my $t = Time::Piece->strptime($timestr, '%b %d');
+      ($t->strftime("$year-%m-%d"), TimeHelper::days_ago $t);
     }
 
     my sub parse_vger_line ($year, @line) {
@@ -92,12 +106,14 @@ package Foostats::Logreader {
       $full_path =~ s/"//g;
       my ($proto, undef, $host, $uri_path) = split '/', $full_path, 4;
       $uri_path = '' unless defined $uri_path;
+      my ($date, $days_ago) = parse_date($year, @line);
       {
         proto => 'gemini',
         host => $host,
         uri_path => "/$uri_path",
         status => $line[6],
-        date => parse_date($year, @line),
+        date => $date,
+        days_ago => $days_ago,
         time => $line[2],
       }
     }
@@ -132,23 +148,29 @@ package Foostats::Logreader {
   sub parse_logs {
     my $agg = Foostats::Aggregator->new;
 
-    my sub foo ($event) { $agg->add($event); }
+    my sub add ($event) {
+      # TODO: Ignore all events older than 3 days
+      $agg->add($event)
+    }
 
     say 'Parsing www logs';
-    parse_www_logs \&foo;
+    parse_www_logs \&add;
     say 'Parsing gemini logs';
-    parse_gemini_logs \&foo;
+    parse_gemini_logs \&add;
 
     return $agg->{stats};
   }
 }
 
 package Foostats::Filter {
+  # TODO: Is there a true/false in Perl now?
+  use constant WARN_ODD => 0;
+
   sub new ($class) {
     bless {
       odds => [qw(
         .php wordpress /wp .asp .. robots.txt .env + % HNAP1 /admin
-        .git microsoft.exchange .lua /owa/
+        .git microsoft.exchange .lua /owa/ 
       )]
     }, $class;
   }
@@ -171,7 +193,8 @@ package Foostats::Filter {
 
     for ($self->{odds}->@*) {
       if (Str::contains $uri_path, $_) {
-        say STDERR "Warn: $uri_path contains $_ and is odd and will therefore be blocked!";
+        say STDERR "Warn: $uri_path contains $_ and is odd and will therefore be blocked!"
+          if WARN_ODD;
         return 1;
       }
     }
@@ -193,7 +216,8 @@ package Foostats::Filter {
 
     # IP requested site more than once within the same second!?
     if (1 < ++($count{$ip_hash} //= 0)) {
-      say STDERR "Warn: $ip_hash blocked due to excessive requesting...";
+      say STDERR "Warn: $ip_hash blocked due to excessive requesting..."
+        if WARN_ODD;
       return 1;
     }
     return 0;
@@ -253,36 +277,55 @@ package Foostats::Aggregator {
 }
 
 package Foostats::Outputter {
-  sub new ($class, %args) {
-    bless \%args, $class;
-  }
+  use JSON;
+  
+  sub new ($class, %args) { bless \%args, $class }
 
   sub write ($self) {
-    my $outfile = $self->{outdir} . '/stats.txt';
-    say "Writing $outfile";
-
-    say 'Unique feed subscribers:';
-    say $self->for_dates(\&_feed_ips);
-    say '';
+    $self->prepare;
+    say $self->for_dates(\&_dump_json);
+    # say 'Unique feed subscribers:';
+    # say $self->for_dates(\&_feed_ips);
+    # say '';
   }
 
   sub for_dates ($self, $callback) {
-    say "$_: " . $callback->($self->{stats}{by_date}{$_})
+    say "$_: " . $callback->($self, $_, $self->{stats}{by_date}{$_})
       for sort keys $self->{stats}->{by_date}->%*;
   }
 
-  sub _feed_ips ($stats) {
-    my $atom_feed = scalar keys $stats->{feed_ips}->{atom_feed}->%*;
-    my $gemfeed = scalar keys $stats->{feed_ips}->{gemfeed}->%*;
-    sprintf "Atom: %2d, Gemfeed: %2d, Total: %2d",
-      $atom_feed, $gemfeed, $atom_feed + $gemfeed;
+  # sub _feed_ips ($self, $date, $stats) {
+  #   my $atom_feed = scalar keys $stats->{feed_ips}->{atom_feed}->%*;
+  #   my $gemfeed = scalar keys $stats->{feed_ips}->{gemfeed}->%*;
+  #   sprintf "Atom: %2d, Gemfeed: %2d, Total: %2d",
+  #     $atom_feed, $gemfeed, $atom_feed + $gemfeed;
+  # }
+
+  sub _dump_json ($self, $date, $stats) {
+      my $path = $self->{outdir} . "/$date.json";
+
+      say "Dumping $path";
+      open my $fd, '>', "$path.tmp" or die "$path.tmp: $!";
+      print $fd encode_json($stats) . "\n";
+      close $fd;
+
+      rename "$path.tmp", $path or die "$path.tmp: $!";
+  } 
+
+  sub prepare ($self) {
+    mkdir $self->{outdir} or die $self->{outdir} . ": $!"
+      unless -d $self->{outdir};
+  }
+
+  sub dump_stats ($self) {
+    my $fd = $self->{outfiles}{'json'};
   }
 }
 
 package main {
   my $out = Foostats::Outputter->new(
     stats => Foostats::Logreader::parse_logs,
-    outdir => '/tmp/',
+    outdir => '/var/stats',
   );
 
   #say Dumper $out;
