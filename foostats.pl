@@ -3,7 +3,7 @@
 use v5.38;
 use strict;
 use warnings;
-#use diagnostics; # TODO: UNDO
+use diagnostics; # TODO: UNDO
 use feature qw(refaliasing);
 no warnings qw(experimental::refaliasing);
 use Data::Dumper;
@@ -13,16 +13,6 @@ package Str {
   sub contains ($x, $y) { -1 != index $x, $y }
   sub starts_with ($x, $y) { 0 == index $x, $y }
   sub ends_with ($x, $y) { length($x) - length($y) == index($x, $y) }
-}
-
-package TimeHelper {
-  use Time::Piece;
-  use Time::Seconds;
-
-  sub days_ago ($t) {
-    state $now = Time::Piece->new;
-    ($now - $t) / ONE_DAY;
-  }
 }
 
 package Foostats::Logreader {
@@ -63,19 +53,19 @@ package Foostats::Logreader {
       }
       say "Closing $path";
       close $file;
-      last; # DEBUGGING ONLY TODO UNDO THIS;
+      # last; # DEBUGGING ONLY TODO UNDO THIS;
     }
   }
 
   sub parse_www_logs ($callback) {
     my sub parse_date ($date) {
       my $t = Time::Piece->strptime($date, '[%d/%b/%Y:%H:%M:%S');
-      ($t->strftime('%Y-%m-%d'), $t->strftime('%H:%M:%S'), TimeHelper::days_ago $t);
+      ($t->strftime('%Y%m%d'), $t->strftime('%H%M%S'));
     }
 
     my sub parse_line (@line) {
       my ($ip_hash, $ip_proto) = anonymize_ip $line[1];
-      my ($date, $time, $days_ago) = parse_date $line[4];
+      my ($date, $time) = parse_date $line[4];
       {
         proto => 'http/s',
         host => $line[0],
@@ -83,7 +73,6 @@ package Foostats::Logreader {
         ip_proto => $ip_proto,
         date => $date,
         time => $time,
-        days_ago => $days_ago,
         uri_path => $line[7],
         status => $line[9],
       }
@@ -97,8 +86,7 @@ package Foostats::Logreader {
   sub parse_gemini_logs ($callback) {
     my sub parse_date ($year, @line) {
       my $timestr = "$line[0] $line[1]";
-      my $t = Time::Piece->strptime($timestr, '%b %d');
-      ($t->strftime("$year-%m-%d"), TimeHelper::days_ago $t);
+      Time::Piece->strptime($timestr, '%b %d')->strftime("$year%m%d");
     }
 
     my sub parse_vger_line ($year, @line) {
@@ -106,14 +94,12 @@ package Foostats::Logreader {
       $full_path =~ s/"//g;
       my ($proto, undef, $host, $uri_path) = split '/', $full_path, 4;
       $uri_path = '' unless defined $uri_path;
-      my ($date, $days_ago) = parse_date($year, @line);
       {
         proto => 'gemini',
         host => $host,
         uri_path => "/$uri_path",
         status => $line[6],
-        date => $date,
-        days_ago => $days_ago,
+        date => parse_date($year, @line),
         time => $line[2],
       }
     }
@@ -147,16 +133,25 @@ package Foostats::Logreader {
 
   sub parse_logs {
     my $agg = Foostats::Aggregator->new;
+    my $localtime= localtime;
+    my $tomorrow = ($localtime + ONE_DAY)->strftime('%Y%m%d');
 
-    my sub add ($event) {
-      # TODO: Ignore all events older than 3 days
-      $agg->add($event)
+    my sub parse ($parser, $description) {
+      say "Parsing $description";
+      my $oldest_date = $tomorrow;
+
+      $parser->(sub ($event) {
+        $oldest_date = $event->{date} if $event->{date} < $oldest_date;
+        $agg->add($event);
+      });
+
+      $oldest_date;
     }
 
-    say 'Parsing www logs';
-    parse_www_logs \&add;
-    say 'Parsing gemini logs';
-    parse_gemini_logs \&add;
+    $agg->evict_dates_to(
+      parse(\&parse_www_logs, 'www logs'),
+      parse(\&parse_gemini_logs, 'gemini logs'),
+    );
 
     return $agg->{stats};
   }
@@ -273,6 +268,17 @@ package Foostats::Aggregator {
     }
 
     return $s;
+  }
+
+  sub evict_dates_to ($self, $date1, $date2) {
+    my $evict_date = $date1 > $date2 ? $date1 : $date2;
+    say "Evicting all dates <= $evict_date";
+
+    for my $date (keys $self->{stats}->{by_date}->%*) {
+      next if $date > $evict_date;
+      say "Evicting date $date... avoiding partial stats";
+      delete $self->{stats}->{by_date}->{$date};
+    }
   }
 }
 
