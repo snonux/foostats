@@ -8,7 +8,6 @@ use feature qw(refaliasing);
 no warnings qw(experimental::refaliasing);
 use Data::Dumper;
 
-# TODO: Do i need to prefix Str:: ?
 package Str {
   sub contains ($x, $y) { -1 != index $x, $y }
   sub starts_with ($x, $y) { 0 == index $x, $y }
@@ -34,9 +33,7 @@ package Foostats::Logreader {
   }
 
   sub read_lines ($glob, $callback) {
-    my sub year ($path) {
-      localtime( (stat $path)->mtime )->strftime('%Y')
-    }
+    my sub year ($path) { localtime( (stat $path)->mtime )->strftime('%Y') }
 
     my sub open_file ($path) {
       my $flag = $path =~ /\.gz$/ ? '<:gzip' : '<';
@@ -53,7 +50,6 @@ package Foostats::Logreader {
       }
       say "Closing $path";
       close $file;
-      # last; # DEBUGGING ONLY TODO UNDO THIS;
     }
   }
 
@@ -78,9 +74,7 @@ package Foostats::Logreader {
       }
     }
 
-    read_lines WWW_LOGS_GLOB, sub ($year, @line) {
-      $callback->(parse_line @line);
-    };
+    read_lines WWW_LOGS_GLOB, sub ($year, @line) { $callback->(parse_line @line) };
   }
 
   sub parse_gemini_logs ($callback) {
@@ -238,7 +232,7 @@ package Foostats::Aggregator {
     $self->{stats}{$date} //= {
       count => { filtered => 0 },
       feed_ips => { atom_feed => {}, gemfeed => {} },
-      page_ips => {},
+      page_ips => { hosts => {}, urls => {} },
     };
 
     \my $s = \$self->{stats}{$date};
@@ -248,8 +242,9 @@ package Foostats::Aggregator {
     }
 
     $self->add_count($s, $event);
-    $self->add_feed_ips($s, $event);
-    # $self->add_count_by_date($event, $date);
+    return if $self->add_feed_ips($s, $event);
+    # Don't add to page IPs if it was a feed call.
+    $self->add_page_ips($s, $event);
   }
 
   sub add_count($self, $stats, $event) {
@@ -262,16 +257,29 @@ package Foostats::Aggregator {
   }
 
   sub add_feed_ips($self, $stats, $event) {
-    \my $e = \$event;
     \my $f = \$stats->{feed_ips};
+    \my $e = \$event;
 
-    if (Str::contains $e->{uri_path}, ATOM_FEED_URI) {
+    if (Str::ends_with $e->{uri_path}, ATOM_FEED_URI) {
       ($f->{atom_feed}->{$e->{ip_hash}} //= 0)++;
     } elsif (Str::contains $e->{uri_path}, GEMFEED_URI) {
       ($f->{gemfeed}->{$e->{ip_hash}} //= 0)++;
     } elsif (Str::ends_with $e->{uri_path}, GEMFEED_URI_2) {
       ($f->{gemfeed}->{$e->{ip_hash}} //= 0)++;
+    } else {
+      0
     }
+  }
+
+  sub add_page_ips($self, $stats, $event) {
+    \my $e = \$event;
+    \my $p = \$stats->{page_ips};
+
+    return if !Str::ends_with($e->{uri_path}, '.html') 
+           && !Str::ends_with($e->{uri_path}, '.gmi');
+
+    ($p->{hosts}->{$e->{host}}->{$e->{ip_hash}} //= 0)++;
+    ($p->{urls}->{$e->{host}.$e->{uri_path}}->{$e->{ip_hash}} //= 0)++;
   }
 
   sub evict_dates_to ($self, $date1, $date2) {
@@ -300,8 +308,7 @@ package Foostats::Outputter {
   }
 
   sub for_dates ($self, $callback) {
-    say "$_: " . $callback->($self, $_, $self->{stats}{$_})
-      for sort keys $self->{stats}->%*;
+    say "$_: " . $callback->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
   }
 
   # sub _feed_ips ($self, $date, $stats) {
