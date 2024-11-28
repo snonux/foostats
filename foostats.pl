@@ -229,35 +229,41 @@ package Foostats::Aggregator {
   sub new ($class) {
     bless {
       filter => Foostats::Filter->new,
-      stats => { by_date => {}, global => { notyetimplemented => 0 } },
+      stats => {},
     }, $class;
   }
 
   sub add ($self, $event) {
     my $date = $event->{date};
-    $self->add_count_by_date($event, $date);
-  }
-
-  sub add_count_by_date ($self, $event, $date) {
-    $self->{stats}{by_date}{$date} //= {
+    $self->{stats}{$date} //= {
       count => { filtered => 0 },
       feed_ips => { atom_feed => {}, gemfeed => {} },
+      page_ips => {},
     };
 
-    \my $s = \$self->{stats}{by_date}{$date};
-    \my $e = \$event;
-
+    \my $s = \$self->{stats}{$date};
     unless ($self->{filter}->ok($event)) {
       $s->{count}{filtered}++;
       return;
     }
 
-    \my $c = \$s->{count};
-    \my $f = \$s->{feed_ips};
+    $self->add_count($s, $event);
+    $self->add_feed_ips($s, $event);
+    # $self->add_count_by_date($event, $date);
+  }
+
+  sub add_count($self, $stats, $event) {
+    \my $c = \$stats->{count};
+    \my $e = \$event;
 
     ($c->{$e->{proto}} //= 0)++;
     ($c->{$e->{ip_proto}} //= 0)++;
     ($c->{$e->{proto}.' '.$e->{ip_proto}} //= 0)++;
+  }
+
+  sub add_feed_ips($self, $stats, $event) {
+    \my $e = \$event;
+    \my $f = \$stats->{feed_ips};
 
     if (Str::contains $e->{uri_path}, ATOM_FEED_URI) {
       ($f->{atom_feed}->{$e->{ip_hash}} //= 0)++;
@@ -266,18 +272,16 @@ package Foostats::Aggregator {
     } elsif (Str::ends_with $e->{uri_path}, GEMFEED_URI_2) {
       ($f->{gemfeed}->{$e->{ip_hash}} //= 0)++;
     }
-
-    return $s;
   }
 
   sub evict_dates_to ($self, $date1, $date2) {
     my $evict_date = $date1 > $date2 ? $date1 : $date2;
     say "Evicting all dates <= $evict_date";
 
-    for my $date (keys $self->{stats}->{by_date}->%*) {
+    for my $date (keys $self->{stats}->%*) {
       next if $date > $evict_date;
       say "Evicting date $date... avoiding partial stats";
-      delete $self->{stats}->{by_date}->{$date};
+      delete $self->{stats}->{$date};
     }
   }
 }
@@ -296,8 +300,8 @@ package Foostats::Outputter {
   }
 
   sub for_dates ($self, $callback) {
-    say "$_: " . $callback->($self, $_, $self->{stats}{by_date}{$_})
-      for sort keys $self->{stats}->{by_date}->%*;
+    say "$_: " . $callback->($self, $_, $self->{stats}{$_})
+      for sort keys $self->{stats}->%*;
   }
 
   # sub _feed_ips ($self, $date, $stats) {
