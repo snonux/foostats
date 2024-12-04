@@ -74,7 +74,7 @@ package Foostats::Logreader {
     my sub parse_web_line (@line) {
       my ($date, $time) = parse_date $line[4];
       return undef if $date < $last_processed_date;
-      my ($ip_hash, $ip_proto) = anonymize_ip $line[1];
+      my ($ip_hash, $ip_proto) = anonymize_ip $line[-2];
 
       return {
         proto => 'web',
@@ -326,11 +326,11 @@ package main {
   }
 
   sub replicate () {
-    die 'replicate not yet implemented';
+    say 'replicate not yet implemented';
   }
 
   sub pretty_print () {
-    die 'pretty_print not yet implemented';
+    say 'pretty_print not yet implemented';
   }
 
   my ($parse_logs, $replicate, $pretty_print);
