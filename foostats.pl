@@ -306,7 +306,6 @@ package Foostats::Outputter {
 
     say "Dumping $path";
     open my $fd, '>', "$path.tmp" or die "$path.tmp: $!";
-    print $fd encode_json($stats) . "\n";
     close $fd;
 
     rename "$path.tmp", $path or die "$path.tmp: $!";
