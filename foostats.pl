@@ -16,16 +16,6 @@ package Str {
   sub ends_with ($x, $y) { length($x) - length($y) == index($x, $y) }
 }
 
-package Time {
-  use Time::Piece;
-  use Time::Seconds;
-
-  sub tomorrow {
-    my $localtime = localtime;
-    ($localtime + ONE_DAY)->strftime('%Y%m%d');
-  }
-}
-
 package Foostats::Logreader {
   use Digest::SHA3 'sha3_512_base64';
   use File::stat;
@@ -43,7 +33,7 @@ package Foostats::Logreader {
     return ($ip_hash, $ip_proto);
   }
 
-  sub read_lines ($glob, $callback) {
+  sub read_lines ($glob, $cb) {
     my sub year ($path) { localtime( (stat $path)->mtime )->strftime('%Y') }
 
     my sub open_file ($path) {
@@ -57,22 +47,24 @@ package Foostats::Logreader {
       my $file = open_file $path;
       my $year = year $file;
       while (<$file>) {
-        $callback->($year, split / +/) unless Str::contains $_, 'logfile turned over';
+        $cb->($year, split / +/) unless Str::contains $_, 'logfile turned over';
       }
       say "Closing $path";
       close $file;
     }
   }
 
-  sub parse_web_logs ($callback) {
+  sub parse_web_logs ($last_processed_date, $cb) {
     my sub parse_date ($date) {
       my $t = Time::Piece->strptime($date, '[%d/%b/%Y:%H:%M:%S');
       return ($t->strftime('%Y%m%d'), $t->strftime('%H%M%S'));
     }
 
-    my sub parse_line (@line) {
-      my ($ip_hash, $ip_proto) = anonymize_ip $line[1];
+    my sub parse_web_line (@line) {
       my ($date, $time) = parse_date $line[4];
+      return undef if $date < $last_processed_date;
+
+      my ($ip_hash, $ip_proto) = anonymize_ip $line[1];
 
       return {
         proto => 'web',
@@ -86,10 +78,10 @@ package Foostats::Logreader {
       }
     }
 
-    read_lines WEB_LOGS_GLOB, sub ($year, @line) { $callback->(parse_line @line) };
+    read_lines WEB_LOGS_GLOB, sub ($year, @line) { $cb->(parse_web_line @line) };
   }
 
-  sub parse_gemini_logs ($callback) {
+  sub parse_gemini_logs ($last_processed_date, $cb) {
     my sub parse_date ($year, @line) {
       my $timestr = "$line[0] $line[1]";
       return Time::Piece->strptime($timestr, '%b %d')->strftime("$year%m%d");
@@ -112,12 +104,15 @@ package Foostats::Logreader {
     }
 
     my sub parse_relayd_line ($year, @line) {
+      my $date = int(parse_date($year, @line));
+      return undef if $date < $last_processed_date;
+
       my ($ip_hash, $ip_proto) = anonymize_ip $line[12];
 
       return {
         ip_hash => $ip_hash,
         ip_proto => $ip_proto,
-        date => int(parse_date($year, @line)),
+        date => $date,
         time => $line[2],
       }
     }
@@ -133,7 +128,7 @@ package Foostats::Logreader {
       }
 
       if (defined $vger and defined $relayd and $vger->{time} eq $relayd->{time}) {
-        $callback->({ %$vger, %$relayd });
+        $cb->({ %$vger, %$relayd });
         $vger = $relayd = undef;
       }
     };
@@ -142,15 +137,12 @@ package Foostats::Logreader {
   sub parse_logs ($last_web_date, $last_gemini_date) {
     my $agg = Foostats::Aggregator->new;
 
-    my sub parse ($parser, $what, $last_processed_date) {
-      say "Parsing $what";
-      $parser->(sub ($event) {
-        $agg->add($event) if $event->{date} >= $last_processed_date;
-      });
-    }
-
-    parse(\&parse_web_logs, 'web', $last_web_date);
-    parse(\&parse_gemini_logs, 'gemini', $last_gemini_date);
+    parse_web_logs $last_web_date, sub ($event) {
+        $agg->add($event) if defined $event;
+    };
+    parse_gemini_logs $last_gemini_date, sub ($event) {
+        $agg->add($event) if defined $event;
+    };
 
     return $agg->{stats};
   }
@@ -294,7 +286,7 @@ package Foostats::Outputter {
 
   sub last_processed_date ($self, $proto) {
     my @processed = glob $self->{outdir} . "/${proto}_????????.json";
-    my ($date) = @processed ? ($processed[-1] =~ /_(\d{8})\.json/) : Time::tomorrow;
+    my ($date) = @processed ? ($processed[-1] =~ /_(\d{8})\.json/) : 0;
     return int($date);
   }
 
@@ -305,8 +297,8 @@ package Foostats::Outputter {
     # say '';
   }
 
-  sub for_dates ($self, $callback) {
-    say "$_: " . $callback->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
+  sub for_dates ($self, $cb) {
+    say "$_: " . $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
   }
 
   # sub _feed_ips ($self, $date, $stats) {
