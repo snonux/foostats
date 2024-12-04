@@ -3,7 +3,7 @@
 use v5.38;
 use strict;
 use warnings;
-use diagnostics; # TODO: UNDO
+# use diagnostics; 
 use feature qw(refaliasing);
 no warnings qw(experimental::refaliasing);
 use Data::Dumper;
@@ -42,13 +42,26 @@ package Foostats::Logreader {
       return $fd;
     }
 
+    my $stop = 0;
+
     for my $path (glob $glob) {
+      if ($stop) {
+        say "No need to read $path anymore";
+        last;
+      }
+
       say "Opening $path";
       my $file = open_file $path;
       my $year = year $file;
+
       while (<$file>) {
-        $cb->($year, split / +/) unless Str::contains $_, 'logfile turned over';
+        next if Str::contains $_, 'logfile turned over';
+        unless (defined $cb->($year, split / +/)) {
+          $stop = 1;
+          next;
+        }
       }
+
       say "Closing $path";
       close $file;
     }
@@ -63,7 +76,6 @@ package Foostats::Logreader {
     my sub parse_web_line (@line) {
       my ($date, $time) = parse_date $line[4];
       return undef if $date < $last_processed_date;
-
       my ($ip_hash, $ip_proto) = anonymize_ip $line[1];
 
       return {
@@ -137,13 +149,8 @@ package Foostats::Logreader {
   sub parse_logs ($last_web_date, $last_gemini_date) {
     my $agg = Foostats::Aggregator->new;
 
-    parse_web_logs $last_web_date, sub ($event) {
-        $agg->add($event) if defined $event;
-    };
-    parse_gemini_logs $last_gemini_date, sub ($event) {
-        $agg->add($event) if defined $event;
-    };
-
+    parse_web_logs $last_web_date, sub ($event) { $agg->add($event) };
+    parse_gemini_logs $last_gemini_date, sub ($event) { $agg->add($event) };
     return $agg->{stats};
   }
 }
@@ -219,6 +226,8 @@ package Foostats::Aggregator {
   }
 
   sub add ($self, $event) {
+    return undef unless defined $event;
+    
     my $date = $event->{date};
     my $date_key = $event->{proto} . "_$date";
 
@@ -231,13 +240,14 @@ package Foostats::Aggregator {
     \my $s = \$self->{stats}{$date_key};
     unless ($self->{filter}->ok($event)) {
       $s->{count}{filtered}++;
-      return;
+      return $event;
     }
 
     $self->add_count($s, $event);
     # Don't add to page IPs if it was a feed call.
-    return if $self->add_feed_ips($s, $event);
+    return $event if $self->add_feed_ips($s, $event);
     $self->add_page_ips($s, $event);
+    return $event;
   }
 
   sub add_count($self, $stats, $event) {
