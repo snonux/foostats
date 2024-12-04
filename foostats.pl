@@ -8,10 +8,22 @@ use feature qw(refaliasing);
 no warnings qw(experimental::refaliasing);
 use Data::Dumper;
 
+# TODO: Blog post about this script and the new Perl features used.
+# TODO: Are there any ready to use Perl modules for this?
 package Str {
   sub contains ($x, $y) { -1 != index $x, $y }
   sub starts_with ($x, $y) { 0 == index $x, $y }
   sub ends_with ($x, $y) { length($x) - length($y) == index($x, $y) }
+}
+
+package Time {
+  use Time::Piece;
+  use Time::Seconds;
+
+  sub tomorrow {
+    my $localtime = localtime;
+    ($localtime + ONE_DAY)->strftime('%Y%m%d');
+  }
 }
 
 package Foostats::Logreader {
@@ -19,11 +31,10 @@ package Foostats::Logreader {
   use File::stat;
   use PerlIO::gzip;
   use Time::Piece;
-  use Time::Seconds;
 
   use constant {
     GEMINI_LOGS_GLOB => '/var/log/daemon*',
-    WWW_LOGS_GLOB => '/var/www/logs/access.log*',
+    WEB_LOGS_GLOB => '/var/www/logs/access.log*',
   };
 
   sub anonymize_ip ($ip) {
@@ -53,17 +64,18 @@ package Foostats::Logreader {
     }
   }
 
-  sub parse_www_logs ($callback) {
+  sub parse_web_logs ($callback) {
     my sub parse_date ($date) {
       my $t = Time::Piece->strptime($date, '[%d/%b/%Y:%H:%M:%S');
-      ($t->strftime('%Y%m%d'), $t->strftime('%H%M%S'));
+      return ($t->strftime('%Y%m%d'), $t->strftime('%H%M%S'));
     }
 
     my sub parse_line (@line) {
       my ($ip_hash, $ip_proto) = anonymize_ip $line[1];
       my ($date, $time) = parse_date $line[4];
-      {
-        proto => 'http/s',
+
+      return {
+        proto => 'web',
         host => $line[0],
         ip_hash => $ip_hash,
         ip_proto => $ip_proto,
@@ -74,13 +86,13 @@ package Foostats::Logreader {
       }
     }
 
-    read_lines WWW_LOGS_GLOB, sub ($year, @line) { $callback->(parse_line @line) };
+    read_lines WEB_LOGS_GLOB, sub ($year, @line) { $callback->(parse_line @line) };
   }
 
   sub parse_gemini_logs ($callback) {
     my sub parse_date ($year, @line) {
       my $timestr = "$line[0] $line[1]";
-      Time::Piece->strptime($timestr, '%b %d')->strftime("$year%m%d");
+      return Time::Piece->strptime($timestr, '%b %d')->strftime("$year%m%d");
     }
 
     my sub parse_vger_line ($year, @line) {
@@ -88,22 +100,24 @@ package Foostats::Logreader {
       $full_path =~ s/"//g;
       my ($proto, undef, $host, $uri_path) = split '/', $full_path, 4;
       $uri_path = '' unless defined $uri_path;
-      {
+
+      return {
         proto => 'gemini',
         host => $host,
         uri_path => "/$uri_path",
         status => $line[6],
-        date => parse_date($year, @line),
+        date => int(parse_date($year, @line)),
         time => $line[2],
       }
     }
 
     my sub parse_relayd_line ($year, @line) {
       my ($ip_hash, $ip_proto) = anonymize_ip $line[12];
-      {
+
+      return {
         ip_hash => $ip_hash,
         ip_proto => $ip_proto,
-        date => parse_date($year, @line),
+        date => int(parse_date($year, @line)),
         time => $line[2],
       }
     }
@@ -125,27 +139,18 @@ package Foostats::Logreader {
     };
   }
 
-  sub parse_logs {
+  sub parse_logs ($last_web_date, $last_gemini_date) {
     my $agg = Foostats::Aggregator->new;
-    my $localtime= localtime;
-    my $tomorrow = ($localtime + ONE_DAY)->strftime('%Y%m%d');
 
-    my sub parse ($parser, $description) {
-      say "Parsing $description";
-      my $oldest_date = $tomorrow;
-
+    my sub parse ($parser, $what, $last_processed_date) {
+      say "Parsing $what";
       $parser->(sub ($event) {
-        $oldest_date = $event->{date} if $event->{date} < $oldest_date;
-        $agg->add($event);
+        $agg->add($event) if $event->{date} >= $last_processed_date;
       });
-
-      $oldest_date;
     }
 
-    $agg->evict_dates_to(
-      parse(\&parse_www_logs, 'www logs'),
-      parse(\&parse_gemini_logs, 'gemini logs'),
-    );
+    parse(\&parse_web_logs, 'web', $last_web_date);
+    parse(\&parse_gemini_logs, 'gemini', $last_gemini_date);
 
     return $agg->{stats};
   }
@@ -171,7 +176,6 @@ package Foostats::Filter {
     if ($self->odd($event) or $self->excessive($event)) {
       ($blocked{$event->{ip_hash}} //= 0)++;
       return 0;
-
     } else {
       return 1;
     }
@@ -182,8 +186,7 @@ package Foostats::Filter {
 
     for ($self->{odds}->@*) {
       if (Str::contains $uri_path, $_) {
-        say STDERR "Warn: $uri_path contains $_ and is odd and will therefore be blocked!"
-          if WARN_ODD;
+        say STDERR "Warn: $uri_path contains $_ and is odd and will therefore be blocked!" if WARN_ODD;
         return 1;
       }
     }
@@ -205,8 +208,7 @@ package Foostats::Filter {
 
     # IP requested site more than once within the same second!?
     if (1 < ++($count{$ip_hash} //= 0)) {
-      say STDERR "Warn: $ip_hash blocked due to excessive requesting..."
-        if WARN_ODD;
+      say STDERR "Warn: $ip_hash blocked due to excessive requesting..." if WARN_ODD;
       return 1;
     }
     return 0;
@@ -221,29 +223,28 @@ package Foostats::Aggregator {
   };
 
   sub new ($class) {
-    bless {
-      filter => Foostats::Filter->new,
-      stats => {},
-    }, $class;
+    bless { filter => Foostats::Filter->new, stats => {} }, $class;
   }
 
   sub add ($self, $event) {
     my $date = $event->{date};
-    $self->{stats}{$date} //= {
+    my $date_key = $event->{proto} . "_$date";
+
+    $self->{stats}{$date_key} //= {
       count => { filtered => 0 },
       feed_ips => { atom_feed => {}, gemfeed => {} },
       page_ips => { hosts => {}, urls => {} },
     };
 
-    \my $s = \$self->{stats}{$date};
+    \my $s = \$self->{stats}{$date_key};
     unless ($self->{filter}->ok($event)) {
       $s->{count}{filtered}++;
       return;
     }
 
     $self->add_count($s, $event);
-    return if $self->add_feed_ips($s, $event);
     # Don't add to page IPs if it was a feed call.
+    return if $self->add_feed_ips($s, $event);
     $self->add_page_ips($s, $event);
   }
 
@@ -253,7 +254,6 @@ package Foostats::Aggregator {
 
     ($c->{$e->{proto}} //= 0)++;
     ($c->{$e->{ip_proto}} //= 0)++;
-    ($c->{$e->{proto}.' '.$e->{ip_proto}} //= 0)++;
   }
 
   sub add_feed_ips($self, $stats, $event) {
@@ -281,26 +281,24 @@ package Foostats::Aggregator {
     ($p->{hosts}->{$e->{host}}->{$e->{ip_hash}} //= 0)++;
     ($p->{urls}->{$e->{host}.$e->{uri_path}}->{$e->{ip_hash}} //= 0)++;
   }
-
-  sub evict_dates_to ($self, $date1, $date2) {
-    my $evict_date = $date1 > $date2 ? $date1 : $date2;
-    say "Evicting all dates <= $evict_date";
-
-    for my $date (keys $self->{stats}->%*) {
-      next if $date > $evict_date;
-      say "Evicting date $date... avoiding partial stats";
-      delete $self->{stats}->{$date};
-    }
-  }
 }
 
 package Foostats::Outputter {
   use JSON;
   
-  sub new ($class, %args) { bless \%args, $class }
+  sub new ($class, %args) {
+    my $self = bless \%args, $class;
+    mkdir $self->{outdir} or die $self->{outdir} . ": $!" unless -d $self->{outdir};
+    return $self;
+  }
+
+  sub last_processed_date ($self, $proto) {
+    my @processed = glob $self->{outdir} . "/${proto}_????????.json";
+    my ($date) = @processed ? ($processed[-1] =~ /_(\d{8})\.json/) : Time::tomorrow;
+    return int($date);
+  }
 
   sub write ($self) {
-    $self->prepare;
     say $self->for_dates(\&_dump_json);
     # say 'Unique feed subscribers:';
     # say $self->for_dates(\&_feed_ips);
@@ -318,8 +316,8 @@ package Foostats::Outputter {
   #     $atom_feed, $gemfeed, $atom_feed + $gemfeed;
   # }
 
-  sub _dump_json ($self, $date, $stats) {
-      my $path = $self->{outdir} . "/$date.json";
+  sub _dump_json ($self, $date_key, $stats) {
+      my $path = $self->{outdir} . "/$date_key.json";
 
       say "Dumping $path";
       open my $fd, '>', "$path.tmp" or die "$path.tmp: $!";
@@ -328,23 +326,13 @@ package Foostats::Outputter {
 
       rename "$path.tmp", $path or die "$path.tmp: $!";
   } 
-
-  sub prepare ($self) {
-    mkdir $self->{outdir} or die $self->{outdir} . ": $!"
-      unless -d $self->{outdir};
-  }
-
-  sub dump_stats ($self) {
-    my $fd = $self->{outfiles}{'json'};
-  }
 }
 
 package main {
-  my $out = Foostats::Outputter->new(
-    stats => Foostats::Logreader::parse_logs,
-    outdir => '/var/stats',
+  my $out = Foostats::Outputter->new(outdir => '/var/foostats');
+  $out->{stats} = Foostats::Logreader::parse_logs(
+    $out->last_processed_date('web'),
+    $out->last_processed_date('gemini'),
   );
-
-  #say Dumper $out;
   $out->write;
 }
