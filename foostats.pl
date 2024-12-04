@@ -74,7 +74,9 @@ package Foostats::Logreader {
     my sub parse_web_line (@line) {
       my ($date, $time) = parse_date $line[4];
       return undef if $date < $last_processed_date;
-      my ($ip_hash, $ip_proto) = anonymize_ip $line[-2];
+      # X-Forwarded-For?
+      my $ip = $line[-2] eq '-' ? $line[1] : $line[-2];
+      my ($ip_hash, $ip_proto) = anonymize_ip $ip;
 
       return {
         proto => 'web',
