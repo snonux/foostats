@@ -3,13 +3,14 @@
 use v5.38;
 use strict;
 use warnings;
-# use diagnostics; 
+
 use feature qw(refaliasing);
 no warnings qw(experimental::refaliasing);
-use Data::Dumper;
+
+# use diagnostics; 
+# use Data::Dumper;
 
 # TODO: Blog post about this script and the new Perl features used.
-# TODO: Are there any ready to use Perl modules for this?
 package Str {
   sub contains ($x, $y) { -1 != index $x, $y }
   sub starts_with ($x, $y) { 0 == index $x, $y }
@@ -42,28 +43,25 @@ package Foostats::Logreader {
       return $fd;
     }
 
-    my $stop = 0;
+    my $last = 0;
 
+  LAST:
     for my $path (glob $glob) {
-      if ($stop) {
-        say "No need to read $path anymore";
-        last;
-      }
+      say "Processing $path";
 
-      say "Opening $path";
       my $file = open_file $path;
       my $year = year $file;
+      my $last = 0;
 
       while (<$file>) {
         next if Str::contains $_, 'logfile turned over';
-        unless (defined $cb->($year, split / +/)) {
-          $stop = 1;
-          next;
-        }
+        # last == 1 means: After this file, don't process more
+        $last = 1 unless defined $cb->($year, split / +/);
       }
 
       say "Closing $path";
       close $file;
+      last LAST if $last;
     }
   }
 
@@ -87,7 +85,7 @@ package Foostats::Logreader {
         time => $time,
         uri_path => $line[7],
         status => $line[9],
-      }
+      };
     }
 
     read_lines WEB_LOGS_GLOB, sub ($year, @line) { $cb->(parse_web_line @line) };
@@ -112,13 +110,12 @@ package Foostats::Logreader {
         status => $line[6],
         date => int(parse_date($year, @line)),
         time => $line[2],
-      }
+      };
     }
 
     my sub parse_relayd_line ($year, @line) {
       my $date = int(parse_date($year, @line));
       return undef if $date < $last_processed_date;
-
       my ($ip_hash, $ip_proto) = anonymize_ip $line[12];
 
       return {
@@ -126,7 +123,7 @@ package Foostats::Logreader {
         ip_proto => $ip_proto,
         date => $date,
         time => $line[2],
-      }
+      };
     }
 
     # Expect one vger and one relayd log line per event! So collect
@@ -151,12 +148,12 @@ package Foostats::Logreader {
 
     parse_web_logs $last_web_date, sub ($event) { $agg->add($event) };
     parse_gemini_logs $last_gemini_date, sub ($event) { $agg->add($event) };
+
     return $agg->{stats};
   }
 }
 
 package Foostats::Filter {
-  # TODO: Is there a true/false in Perl now?
   use constant WARN_ODD => 0;
 
   sub new ($class) {
@@ -221,9 +218,7 @@ package Foostats::Aggregator {
     GEMFEED_URI_2 => '/gemfeed/',
   };
 
-  sub new ($class) {
-    bless { filter => Foostats::Filter->new, stats => {} }, $class;
-  }
+  sub new ($class) { bless { filter => Foostats::Filter->new, stats => {} }, $class }
 
   sub add ($self, $event) {
     return undef unless defined $event;
@@ -244,9 +239,7 @@ package Foostats::Aggregator {
     }
 
     $self->add_count($s, $event);
-    # Don't add to page IPs if it was a feed call.
-    return $event if $self->add_feed_ips($s, $event);
-    $self->add_page_ips($s, $event);
+    $self->add_page_ips($s, $event) unless $self->add_feed_ips($s, $event);
     return $event;
   }
 
@@ -300,41 +293,52 @@ package Foostats::Outputter {
     return int($date);
   }
 
-  sub write ($self) {
-    say $self->for_dates(\&_dump_json);
-    # say 'Unique feed subscribers:';
-    # say $self->for_dates(\&_feed_ips);
-    # say '';
-  }
+  sub write ($self) { say $self->for_dates(\&_dump_json) }
 
   sub for_dates ($self, $cb) {
     say "$_: " . $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
   }
 
-  # sub _feed_ips ($self, $date, $stats) {
-  #   my $atom_feed = scalar keys $stats->{feed_ips}->{atom_feed}->%*;
-  #   my $gemfeed = scalar keys $stats->{feed_ips}->{gemfeed}->%*;
-  #   sprintf "Atom: %2d, Gemfeed: %2d, Total: %2d",
-  #     $atom_feed, $gemfeed, $atom_feed + $gemfeed;
-  # }
-
   sub _dump_json ($self, $date_key, $stats) {
-      my $path = $self->{outdir} . "/$date_key.json";
+    my $path = $self->{outdir} . "/$date_key.json";
 
-      say "Dumping $path";
-      open my $fd, '>', "$path.tmp" or die "$path.tmp: $!";
-      print $fd encode_json($stats) . "\n";
-      close $fd;
+    say "Dumping $path";
+    open my $fd, '>', "$path.tmp" or die "$path.tmp: $!";
+    print $fd encode_json($stats) . "\n";
+    close $fd;
 
-      rename "$path.tmp", $path or die "$path.tmp: $!";
+    rename "$path.tmp", $path or die "$path.tmp: $!";
   } 
 }
 
 package main {
-  my $out = Foostats::Outputter->new(outdir => '/var/foostats');
-  $out->{stats} = Foostats::Logreader::parse_logs(
-    $out->last_processed_date('web'),
-    $out->last_processed_date('gemini'),
-  );
-  $out->write;
+  use Getopt::Long;
+
+  sub parse_logs () {
+    my $out = Foostats::Outputter->new(outdir => '/var/foostats');
+
+    $out->{stats} = Foostats::Logreader::parse_logs(
+      $out->last_processed_date('web'),
+      $out->last_processed_date('gemini'),
+    );
+
+    $out->write;
+  }
+
+  sub replicate () {
+    die 'replicate not yet implemented';
+  }
+
+  sub pretty_print () {
+    die 'pretty_print not yet implemented';
+  }
+
+  my ($parse_logs, $replicate, $pretty_print);
+  GetOptions 'parse-logs'   => \$parse_logs,
+             'replicate'    => \$replicate,
+             'pretty-print' => \$pretty_print;
+
+  parse_logs if $parse_logs;
+  replicate if $replicate;
+  pretty_print if $pretty_print;
 }
