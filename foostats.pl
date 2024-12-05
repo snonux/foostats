@@ -1,7 +1,6 @@
 #!/usr/bin/perl
 
 use v5.38;
-use strict;
 
 use builtin qw(true false);
 use experimental qw(builtin);
