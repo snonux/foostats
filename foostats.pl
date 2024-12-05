@@ -55,7 +55,7 @@ package Foostats::Logreader {
 
       while (<$file>) {
         next if contains($_, 'logfile turned over');
-        # last == 1 means: After this file, don't process more
+        # last == true means: After this file, don't process more
         $last = true unless defined $cb->($year, split / +/);
       }
 
