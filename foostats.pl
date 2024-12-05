@@ -2,6 +2,10 @@
 
 use v5.38;
 
+# Those are enabled automatically now w/ this version of Perl
+# use strict;
+# use warnings;
+
 use builtin qw(true false);
 use experimental qw(builtin);
 
@@ -12,17 +16,13 @@ no warnings qw(experimental::refaliasing);
 # use Data::Dumper;
 
 # TODO: Blog post about this script and the new Perl features used.
-package Str {
-  sub contains ($x, $y) { -1 != index $x, $y }
-  sub starts_with ($x, $y) { 0 == index $x, $y }
-  sub ends_with ($x, $y) { length($x) - length($y) == index($x, $y) }
-}
 
 package Foostats::Logreader {
   use Digest::SHA3 'sha3_512_base64';
   use File::stat;
   use PerlIO::gzip;
   use Time::Piece;
+  use String::Util qw(contains startswith endswith);
 
   use constant {
     GEMINI_LOGS_GLOB => '/var/log/daemon*',
@@ -30,7 +30,7 @@ package Foostats::Logreader {
   };
 
   sub anonymize_ip ($ip) {
-    my $ip_proto = (Str::contains $ip, ':') ? 'IPv6' : 'IPv4';
+    my $ip_proto = contains($ip, ':') ? 'IPv6' : 'IPv4';
     my $ip_hash = sha3_512_base64 $ip;
     return ($ip_hash, $ip_proto);
   }
@@ -54,7 +54,7 @@ package Foostats::Logreader {
       my $year = year $file;
 
       while (<$file>) {
-        next if Str::contains $_, 'logfile turned over';
+        next if contains($_, 'logfile turned over');
         # last == 1 means: After this file, don't process more
         $last = true unless defined $cb->($year, split / +/);
       }
@@ -74,6 +74,7 @@ package Foostats::Logreader {
     my sub parse_web_line (@line) {
       my ($date, $time) = parse_date $line[4];
       return undef if $date < $last_processed_date;
+
       # X-Forwarded-For?
       my $ip = $line[-2] eq '-' ? $line[1] : $line[-2];
       my ($ip_hash, $ip_proto) = anonymize_ip $ip;
@@ -118,8 +119,8 @@ package Foostats::Logreader {
     my sub parse_relayd_line ($year, @line) {
       my $date = int(parse_date($year, @line));
       return undef if $date < $last_processed_date;
-      my ($ip_hash, $ip_proto) = anonymize_ip $line[12];
 
+      my ($ip_hash, $ip_proto) = anonymize_ip $line[12];
       return {
         ip_hash => $ip_hash,
         ip_proto => $ip_proto,
@@ -134,7 +135,7 @@ package Foostats::Logreader {
     read_lines GEMINI_LOGS_GLOB, sub ($year, @line) {
       if ($line[4] eq 'vger:') {
         $vger = parse_vger_line $year, @line;
-      } elsif ($line[5] eq 'relay' and Str::starts_with $line[6], 'gemini') {
+      } elsif ($line[5] eq 'relay' and startswith($line[6], 'gemini')) {
         $relayd = parse_relayd_line $year, @line;
       }
 
@@ -156,6 +157,7 @@ package Foostats::Logreader {
 }
 
 package Foostats::Filter {
+  use String::Util qw(contains startswith endswith);
   use constant WARN_ODD => 0;
 
   sub new ($class) {
@@ -183,7 +185,7 @@ package Foostats::Filter {
     \my $uri_path = \$event->{uri_path};
 
     for ($self->{odds}->@*) {
-      if (Str::contains $uri_path, $_) {
+      if (contains($uri_path, $_)) {
         say STDERR "Warn: $uri_path contains $_ and is odd and will therefore be blocked!" if WARN_ODD;
         return true;
       }
@@ -210,11 +212,14 @@ package Foostats::Filter {
       say STDERR "Warn: $ip_hash blocked due to excessive requesting..." if WARN_ODD;
       return true;
     }
+
     return false;
   }
 }
 
 package Foostats::Aggregator {
+  use String::Util qw(contains startswith endswith);
+
   use constant {
     ATOM_FEED_URI => '/gemfeed/atom.xml',
     GEMFEED_URI => '/gemfeed/index.gmi',
@@ -243,10 +248,11 @@ package Foostats::Aggregator {
 
     $self->add_count($s, $event);
     $self->add_page_ips($s, $event) unless $self->add_feed_ips($s, $event);
+
     return $event;
   }
 
-  sub add_count($self, $stats, $event) {
+  sub add_count ($self, $stats, $event) {
     \my $c = \$stats->{count};
     \my $e = \$event;
 
@@ -254,27 +260,27 @@ package Foostats::Aggregator {
     ($c->{$e->{ip_proto}} //= 0)++;
   }
 
-  sub add_feed_ips($self, $stats, $event) {
+  sub add_feed_ips ($self, $stats, $event) {
     \my $f = \$stats->{feed_ips};
     \my $e = \$event;
 
-    if (Str::ends_with $e->{uri_path}, ATOM_FEED_URI) {
+    if (endswith($e->{uri_path}, ATOM_FEED_URI)) {
       ($f->{atom_feed}->{$e->{ip_hash}} //= 0)++;
-    } elsif (Str::contains $e->{uri_path}, GEMFEED_URI) {
+    } elsif (contains($e->{uri_path}, GEMFEED_URI)) {
       ($f->{gemfeed}->{$e->{ip_hash}} //= 0)++;
-    } elsif (Str::ends_with $e->{uri_path}, GEMFEED_URI_2) {
+    } elsif (endswith($e->{uri_path}, GEMFEED_URI_2)) {
       ($f->{gemfeed}->{$e->{ip_hash}} //= 0)++;
     } else {
       0
     }
   }
 
-  sub add_page_ips($self, $stats, $event) {
+  sub add_page_ips ($self, $stats, $event) {
     \my $e = \$event;
     \my $p = \$stats->{page_ips};
 
-    return if !Str::ends_with($e->{uri_path}, '.html') 
-           && !Str::ends_with($e->{uri_path}, '.gmi');
+    return if !endswith($e->{uri_path}, '.html') 
+           && !endswith($e->{uri_path}, '.gmi');
 
     ($p->{hosts}->{$e->{host}}->{$e->{ip_hash}} //= 0)++;
     ($p->{urls}->{$e->{host}.$e->{uri_path}}->{$e->{ip_hash}} //= 0)++;
@@ -296,17 +302,17 @@ package Foostats::Outputter {
     return int($date);
   }
 
-  sub write ($self) { say $self->for_dates(\&_dump_json) }
+  sub write ($self) { $self->for_dates(\&write_json) }
 
   sub for_dates ($self, $cb) {
     $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
   }
 
-  sub _dump_json ($self, $date_key, $stats) {
+  sub write_json ($self, $date_key, $stats) {
     my $path = $self->{outdir} . "/$date_key.json";
     my $json = encode_json $stats;
 
-    say "Dumping $path";
+    say "Writing $path";
     open my $fd, '>', "$path.tmp" or die "$path.tmp: $!";
     print $fd $json;
     close $fd;
@@ -329,13 +335,8 @@ package main {
     $out->write;
   }
 
-  sub replicate () {
-    say 'replicate not yet implemented';
-  }
-
-  sub pretty_print () {
-    say 'pretty_print not yet implemented';
-  }
+  sub replicate () { say 'replicate not yet implemented' }
+  sub pretty_print () { say 'pretty_print not yet implemented' }
 
   my ($parse_logs, $replicate, $pretty_print);
   GetOptions 'parse-logs'   => \$parse_logs,
