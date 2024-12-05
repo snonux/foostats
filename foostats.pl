@@ -4,6 +4,9 @@ use v5.38;
 use strict;
 use warnings;
 
+use builtin qw(true false);
+use experimental qw(builtin);
+
 use feature qw(refaliasing);
 no warnings qw(experimental::refaliasing);
 
@@ -43,7 +46,7 @@ package Foostats::Logreader {
       return $fd;
     }
 
-    my $last = 0;
+    my $last = false;
 
   LAST:
     for my $path (glob $glob) {
@@ -51,12 +54,11 @@ package Foostats::Logreader {
 
       my $file = open_file $path;
       my $year = year $file;
-      my $last = 0;
 
       while (<$file>) {
         next if Str::contains $_, 'logfile turned over';
         # last == 1 means: After this file, don't process more
-        $last = 1 unless defined $cb->($year, split / +/);
+        $last = true unless defined $cb->($year, split / +/);
       }
 
       say "Closing $path";
@@ -169,13 +171,13 @@ package Foostats::Filter {
 
   sub ok ($self, $event) {
     state %blocked = ();
-    return 0 if exists $blocked{$event->{ip_hash}};
+    return false if exists $blocked{$event->{ip_hash}};
 
     if ($self->odd($event) or $self->excessive($event)) {
       ($blocked{$event->{ip_hash}} //= 0)++;
-      return 0;
+      return false;
     } else {
-      return 1;
+      return true;
     }
   }
 
@@ -185,10 +187,11 @@ package Foostats::Filter {
     for ($self->{odds}->@*) {
       if (Str::contains $uri_path, $_) {
         say STDERR "Warn: $uri_path contains $_ and is odd and will therefore be blocked!" if WARN_ODD;
-        return 1;
+        return true;
       }
     }
-    return 0;
+
+    return false;
   }
 
   sub excessive ($self, $event) {
@@ -201,15 +204,15 @@ package Foostats::Filter {
     if ($last_time ne $time) {
       $last_time = $time;
       %count = ();
-      return 0;
+      return false;
     }
 
     # IP requested site more than once within the same second!?
     if (1 < ++($count{$ip_hash} //= 0)) {
       say STDERR "Warn: $ip_hash blocked due to excessive requesting..." if WARN_ODD;
-      return 1;
+      return true;
     }
-    return 0;
+    return false;
   }
 }
 
@@ -298,14 +301,16 @@ package Foostats::Outputter {
   sub write ($self) { say $self->for_dates(\&_dump_json) }
 
   sub for_dates ($self, $cb) {
-    say "$_: " . $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
+    $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
   }
 
   sub _dump_json ($self, $date_key, $stats) {
     my $path = $self->{outdir} . "/$date_key.json";
+    my $json = encode_json $stats;
 
     say "Dumping $path";
     open my $fd, '>', "$path.tmp" or die "$path.tmp: $!";
+    print $fd $json;
     close $fd;
 
     rename "$path.tmp", $path or die "$path.tmp: $!";
