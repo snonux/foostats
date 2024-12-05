@@ -2,7 +2,6 @@
 
 use v5.38;
 use strict;
-use warnings;
 
 use builtin qw(true false);
 use experimental qw(builtin);
