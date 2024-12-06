@@ -80,14 +80,14 @@ package Foostats::Logreader {
       my ($ip_hash, $ip_proto) = anonymize_ip $ip;
 
       return {
-        proto => 'web',
-        host => $line[0],
-        ip_hash => $ip_hash,
+        proto    => 'web',
+        host     => $line[0],
+        ip_hash  => $ip_hash,
         ip_proto => $ip_proto,
-        date => $date,
-        time => $time,
+        date     => $date,
+        time     => $time,
         uri_path => $line[7],
-        status => $line[9],
+        status   => $line[9],
       };
     }
 
@@ -107,12 +107,12 @@ package Foostats::Logreader {
       $uri_path = '' unless defined $uri_path;
 
       return {
-        proto => 'gemini',
-        host => $host,
+        proto    => 'gemini',
+        host     => $host,
         uri_path => "/$uri_path",
-        status => $line[6],
-        date => int(parse_date($year, @line)),
-        time => $line[2],
+        status   => $line[6],
+        date     => int(parse_date($year, @line)),
+        time     => $line[2],
       };
     }
 
@@ -122,10 +122,10 @@ package Foostats::Logreader {
 
       my ($ip_hash, $ip_proto) = anonymize_ip $line[12];
       return {
-        ip_hash => $ip_hash,
+        ip_hash  => $ip_hash,
         ip_proto => $ip_proto,
-        date => $date,
-        time => $line[2],
+        date     => $date,
+        time     => $line[2],
       };
     }
 
@@ -158,7 +158,7 @@ package Foostats::Logreader {
 
 package Foostats::Filter {
   use String::Util qw(contains startswith endswith);
-  use constant WARN_ODD => 0;
+  use constant WARN_ODD => false;
 
   sub new ($class) {
     bless {
@@ -222,7 +222,7 @@ package Foostats::Aggregator {
 
   use constant {
     ATOM_FEED_URI => '/gemfeed/atom.xml',
-    GEMFEED_URI => '/gemfeed/index.gmi',
+    GEMFEED_URI   => '/gemfeed/index.gmi',
     GEMFEED_URI_2 => '/gemfeed/',
   };
 
@@ -235,9 +235,9 @@ package Foostats::Aggregator {
     my $date_key = $event->{proto} . "_$date";
 
     $self->{stats}{$date_key} //= {
-      count => { filtered => 0 },
+      count    => { filtered  => 0 },
       feed_ips => { atom_feed => {}, gemfeed => {} },
-      page_ips => { hosts => {}, urls => {} },
+      page_ips => { hosts     => {}, urls    => {} },
     };
 
     \my $s = \$self->{stats}{$date_key};
@@ -289,27 +289,27 @@ package Foostats::Aggregator {
 
 package Foostats::Outputter {
   use JSON;
+  use Sys::Hostname;
   
   sub new ($class, %args) {
     my $self = bless \%args, $class;
-    mkdir $self->{outdir} or die $self->{outdir} . ": $!" unless -d $self->{outdir};
+    mkdir $self->{stats_dir} or die $self->{stats_dir} . ": $!" unless -d $self->{stats_dir};
     return $self;
   }
 
   sub last_processed_date ($self, $proto) {
-    my @processed = glob $self->{outdir} . "/${proto}_????????.json";
-    my ($date) = @processed ? ($processed[-1] =~ /_(\d{8})\.json/) : 0;
+    my $hostname = hostname();
+    my @processed = glob $self->{stats_dir} . "/${proto}_????????.$hostname.json";
+    my ($date) = @processed ? ($processed[-1] =~ /_(\d{8})\.$hostname\.json/) : 0;
     return int($date);
   }
 
   sub write ($self) { $self->for_dates(\&write_json) }
-
-  sub for_dates ($self, $cb) {
-    $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
-  }
+  sub for_dates ($self, $cb) { $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%* }
 
   sub write_json ($self, $date_key, $stats) {
-    my $path = $self->{outdir} . "/$date_key.json";
+    my $hostname = hostname();
+    my $path = $self->{stats_dir} . "/${date_key}.$hostname.json";
     my $json = encode_json $stats;
 
     say "Writing $path";
@@ -321,11 +321,20 @@ package Foostats::Outputter {
   } 
 }
 
+package Foostats::Replicator {
+  sub new ($class, %args) { bless \%args, $class }
+
+  sub replicate ($self, $partner_node) {
+    die 'Replicate is not yet implemented';
+  }
+}
+
 package main {
   use Getopt::Long;
+  use Sys::Hostname;
 
-  sub parse_logs () {
-    my $out = Foostats::Outputter->new(outdir => '/var/foostats');
+  sub parse_logs ($stats_dir) {
+    my $out = Foostats::Outputter->new(stats_dir => $stats_dir);
 
     $out->{stats} = Foostats::Logreader::parse_logs(
       $out->last_processed_date('web'),
@@ -335,15 +344,23 @@ package main {
     $out->write;
   }
 
-  sub replicate () { say 'replicate not yet implemented' }
+  sub replicate ($stats_dir, $partner_node) {
+    die 'Partner node not specified' unless defined $partner_node;
+    Foostats::Replicator->new(stats_dir => $stats_dir)->replicate($partner_node);
+  }
+
   sub pretty_print () { say 'pretty_print not yet implemented' }
 
-  my ($parse_logs, $replicate, $pretty_print);
+  my ($parse_logs, $replicate, $pretty_print, $partner_node);
+  my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
+
   GetOptions 'parse-logs'   => \$parse_logs,
              'replicate'    => \$replicate,
-             'pretty-print' => \$pretty_print;
+             'pretty-print' => \$pretty_print,
+             'stats-dir'    => \$stats_dir,
+             'partner-node' => \$partner_node;
 
-  parse_logs if $parse_logs;
-  replicate if $replicate;
-  pretty_print if $pretty_print;
+  parse_logs $stats_dir if $parse_logs;
+  replicate $stats_dir, $partner_node if $replicate;
+  pretty_print $stats_dir if $pretty_print;
 }
