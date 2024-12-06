@@ -364,3 +364,8 @@ package main {
   replicate $stats_dir, $partner_node if $replicate;
   pretty_print $stats_dir if $pretty_print;
 }
+
+# TODO NEXT:
+# 1) Implement replicator
+# 2) Also merge the results
+# 3) Write out a nice output from each merged file
