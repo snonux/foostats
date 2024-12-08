@@ -46,20 +46,30 @@ package Foostats::Logreader {
 
     my $last = false;
 
+    say 'File path glob matches: ' . join(' ', glob $glob);
+
   LAST:
     for my $path (glob $glob) {
       say "Processing $path";
 
       my $file = open_file $path;
       my $year = year $file;
+      # my $fist_line_printed = false;
 
       while (<$file>) {
         next if contains($_, 'logfile turned over');
+        # unless ($fist_line_printed) {
+        #   # For debugging purposes.
+        #   say "$path\'s first line:";
+        #   say $_;
+        #   $fist_line_printed = true;
+        # }
+
         # last == true means: After this file, don't process more
         $last = true unless defined $cb->($year, split / +/);
       }
 
-      say "Closing $path";
+      say "Closing $path (last:$last)";
       close $file;
       last LAST if $last;
     }
@@ -118,7 +128,6 @@ package Foostats::Logreader {
 
     my sub parse_relayd_line ($year, @line) {
       my $date = int(parse_date($year, @line));
-      return undef if $date < $last_processed_date;
 
       my ($ip_hash, $ip_proto) = anonymize_ip $line[12];
       return {
@@ -137,17 +146,23 @@ package Foostats::Logreader {
         $vger = parse_vger_line $year, @line;
       } elsif ($line[5] eq 'relay' and startswith($line[6], 'gemini')) {
         $relayd = parse_relayd_line $year, @line;
+        return undef if $relayd->{date} < $last_processed_date;
       }
 
       if (defined $vger and defined $relayd and $vger->{time} eq $relayd->{time}) {
         $cb->({ %$vger, %$relayd });
         $vger = $relayd = undef;
       }
+
+      true;
     };
   }
 
   sub parse_logs ($last_web_date, $last_gemini_date) {
     my $agg = Foostats::Aggregator->new;
+
+    say "Last web date: $last_web_date";
+    say "Last gemini date: $last_gemini_date";
 
     parse_web_logs $last_web_date, sub ($event) { $agg->add($event) };
     parse_gemini_logs $last_gemini_date, sub ($event) { $agg->add($event) };
