@@ -16,6 +16,10 @@ no warnings qw(experimental::refaliasing);
 # use Data::Dumper;
 
 # TODO: Blog post about this script and the new Perl features used.
+# TODO NEXT:
+# 1) Implement replicator
+# 2) Also merge the results
+# 3) Write out a nice output from each merged file
 
 package Foostats::Logreader {
   use Digest::SHA3 'sha3_512_base64';
@@ -49,21 +53,14 @@ package Foostats::Logreader {
     say 'File path glob matches: ' . join(' ', glob $glob);
 
   LAST:
-    for my $path (glob $glob) {
+    for my $path ( sort { -M $a <=> -M $b } glob $glob) {
       say "Processing $path";
 
       my $file = open_file $path;
       my $year = year $file;
-      # my $fist_line_printed = false;
 
       while (<$file>) {
         next if contains($_, 'logfile turned over');
-        # unless ($fist_line_printed) {
-        #   # For debugging purposes.
-        #   say "$path\'s first line:";
-        #   say $_;
-        #   $fist_line_printed = true;
-        # }
 
         # last == true means: After this file, don't process more
         $last = true unless defined $cb->($year, split / +/);
@@ -379,8 +376,3 @@ package main {
   replicate $stats_dir, $partner_node if $replicate;
   pretty_print $stats_dir if $pretty_print;
 }
-
-# TODO NEXT:
-# 1) Implement replicator
-# 2) Also merge the results
-# 3) Write out a nice output from each merged file
