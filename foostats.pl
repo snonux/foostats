@@ -301,7 +301,8 @@ package Foostats::Aggregator {
 
 package Foostats::Outputter {
   use JSON;
-  use Sys::Hostname;
+  use Sys::Hostname;      
+  use PerlIO::gzip;
   
   sub new ($class, %args) {
     my $self = bless \%args, $class;
@@ -311,8 +312,8 @@ package Foostats::Outputter {
 
   sub last_processed_date ($self, $proto) {
     my $hostname = hostname();
-    my @processed = glob $self->{stats_dir} . "/${proto}_????????.$hostname.json";
-    my ($date) = @processed ? ($processed[-1] =~ /_(\d{8})\.$hostname\.json/) : 0;
+    my @processed = glob $self->{stats_dir} . "/${proto}_????????.$hostname.json.gz";
+    my ($date) = @processed ? ($processed[-1] =~ /_(\d{8})\.$hostname\.json.gz/) : 0;
     return int($date);
   }
 
@@ -321,11 +322,11 @@ package Foostats::Outputter {
 
   sub write_json ($self, $date_key, $stats) {
     my $hostname = hostname();
-    my $path = $self->{stats_dir} . "/${date_key}.$hostname.json";
+    my $path = $self->{stats_dir} . "/${date_key}.$hostname.json.gz";
     my $json = encode_json $stats;
 
     say "Writing $path";
-    open my $fd, '>', "$path.tmp" or die "$path.tmp: $!";
+    open my $fd, '>:gzip', "$path.tmp" or die "$path.tmp: $!";
     print $fd $json;
     close $fd;
 
