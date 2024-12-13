@@ -335,10 +335,59 @@ package Foostats::Outputter {
 }
 
 package Foostats::Replicator {
+  use File::Basename;
+  use Time::Piece;
+  use LWP::UserAgent;
+  
   sub new ($class, %args) { bless \%args, $class }
 
   sub replicate ($self, $partner_node) {
-    die 'Replicate is not yet implemented';
+    say "Replicating from $partner_node";
+
+    for my $proto (qw(gemini web)) {
+      my $count = 0;
+
+      for my $date (_last_week_dates()) {
+        my $dest_file = "${proto}_${date}.$partner_node.json.gz";
+
+        $self->replicate_file(
+          "https://$partner_node/foostats/$dest_file", 
+          $self->{stats_dir} . '/' . $dest_file,
+          $count++ < 3, # Always replicate the newest 3 files.
+        )
+      }
+    }
+  }
+
+  sub replicate_file ($self, $remote_url, $dest_file, $force) {
+    # $dest_file already exists, not replicating it
+    return if !$force && -f $dest_file;
+
+    print "Replicating $remote_url to $dest_file (force:$force)... ";
+    my $response = LWP::UserAgent->new->get($remote_url);
+    unless ($response->is_success) {
+      say "\nFailed to fetch the file: " . $response->status_line;
+      return;
+    }
+
+    open my $fh, '>', "$dest_file.tmp" or die "\nCannot open file: $!";
+    print $fh $response->decoded_content;
+    close $fh;
+
+    rename "$dest_file.tmp", $dest_file;
+    say 'done';
+  }
+
+  sub _last_week_dates () {
+    my $today = localtime;
+    my @last_week;
+
+    for my $days_ago (0..7) {
+      my $date = $today - ($days_ago * 24 * 60 * 60);
+      push @last_week, $date->strftime('%Y%m%d');
+    }
+
+    return @last_week;
   }
 }
 
@@ -358,7 +407,13 @@ package main {
   }
 
   sub replicate ($stats_dir, $partner_node) {
-    die 'Partner node not specified' unless defined $partner_node;
+    unless (defined $partner_node) {
+      # Default values if partner node not set.
+      $partner_node = hostname eq 'fishfinger.buetow.org' 
+                    ? 'blowfish.buetow.org'
+                    : 'fishfinger.buetow.org';
+    }
+
     Foostats::Replicator->new(stats_dir => $stats_dir)->replicate($partner_node);
   }
 
