@@ -6,7 +6,7 @@ Small Perl script reporting anonymous site stats for my foo.zone web and gemini 
 On OpenBSD, install dependencies:
 
 ```sh
-doas pkg_add p5-Digest-SHA3 p5-PerlIO-gzip p5-JSON p5-String-Util
+doas pkg_add p5-Digest-SHA3 p5-PerlIO-gzip p5-JSON p5-String-Util p5-LWP-Protocol-https
 ```
 
 ## Usage
