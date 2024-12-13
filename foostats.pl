@@ -347,7 +347,7 @@ package Foostats::Replicator {
     for my $proto (qw(gemini web)) {
       my $count = 0;
 
-      for my $date (_last_week_dates()) {
+      for my $date (_last_month_dates()) {
         my $dest_file = "${proto}_${date}.$partner_node.json.gz";
 
         $self->replicate_file(
@@ -378,11 +378,11 @@ package Foostats::Replicator {
     say 'done';
   }
 
-  sub _last_week_dates () {
+  sub _last_month_dates () {
     my $today = localtime;
     my @last_week;
 
-    for my $days_ago (0..7) {
+    for my $days_ago (0..30) {
       my $date = $today - ($days_ago * 24 * 60 * 60);
       push @last_week, $date->strftime('%Y%m%d');
     }
