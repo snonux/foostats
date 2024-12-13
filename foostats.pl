@@ -407,20 +407,17 @@ package main {
   }
 
   sub replicate ($stats_dir, $partner_node) {
-    unless (defined $partner_node) {
-      # Default values if partner node not set.
-      $partner_node = hostname eq 'fishfinger.buetow.org' 
-                    ? 'blowfish.buetow.org'
-                    : 'fishfinger.buetow.org';
-    }
-
     Foostats::Replicator->new(stats_dir => $stats_dir)->replicate($partner_node);
   }
 
   sub pretty_print () { say 'pretty_print not yet implemented' }
 
-  my ($parse_logs, $replicate, $pretty_print, $partner_node);
+  my ($parse_logs, $replicate, $pretty_print);
+
+  # With default values
   my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
+  my $partner_node = hostname eq 'fishfinger.buetow.org' 
+                   ? 'blowfish.buetow.org' : 'fishfinger.buetow.org';
 
   GetOptions 'parse-logs'   => \$parse_logs,
              'replicate'    => \$replicate,
