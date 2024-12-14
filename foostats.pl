@@ -365,7 +365,6 @@ package Foostats::Replicator {
   sub replicate_file ($self, $remote_url, $dest_file, $force) {
     # $dest_file already exists, not replicating it
     return if !$force && -f $dest_file;
-    return # UNDO
 
     say "Replicating $remote_url to $dest_file (force:$force)... ";
     my $response = LWP::UserAgent->new->get($remote_url);
