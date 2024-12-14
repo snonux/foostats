@@ -325,6 +325,7 @@ package Foostats::Outputter {
     my $path = $self->{stats_dir} . "/${date_key}.$hostname.json.gz";
     my $json = encode_json $stats;
 
+    # TODO: Move code out to helper function DRY
     say "Writing $path";
     open my $fd, '>:gzip', "$path.tmp" or die "$path.tmp: $!";
     print $fd $json;
@@ -335,26 +336,37 @@ package Foostats::Outputter {
 }
 
 package Foostats::Replicator {
+  use JSON;
   use File::Basename;
   use Time::Piece;
   use LWP::UserAgent;
+  use Scalar::Util qw(looks_like_number);
   
   sub new ($class, %args) { bless \%args, $class }
 
-  sub replicate ($self, $partner_node) {
+  sub replicate_and_merge ($self, $partner_node) {
     say "Replicating from $partner_node";
 
     for my $proto (qw(gemini web)) {
       my $count = 0;
 
       for my $date (_last_month_dates()) {
-        my $dest_file = "${proto}_${date}.$partner_node.json.gz";
+        my $file_base = "${proto}_${date}";
+        my $dest_file = "${file_base}.$partner_node.json.gz";
 
         $self->replicate_file(
           "https://$partner_node/foostats/$dest_file", 
           $self->{stats_dir} . '/' . $dest_file,
-          $count++ < 3, # Always replicate the newest 3 files.
-        )
+          $count < 3, # Always replicate the newest 3 files.
+        );
+
+        $self->merge_files(
+          $self->{stats_dir} . "/${file_base}.*.json.gz",
+          $self->{stats_dir} . "/merged.${file_base}.json.gz",
+          $count < 3, # Always merge the newest 3 files.
+        );
+
+        $count++;
       }
     }
   }
@@ -362,6 +374,7 @@ package Foostats::Replicator {
   sub replicate_file ($self, $remote_url, $dest_file, $force) {
     # $dest_file already exists, not replicating it
     return if !$force && -f $dest_file;
+    return # UNDO
 
     print "Replicating $remote_url to $dest_file (force:$force)... ";
     my $response = LWP::UserAgent->new->get($remote_url);
@@ -376,6 +389,60 @@ package Foostats::Replicator {
 
     rename "$dest_file.tmp", $dest_file;
     say 'done';
+  }
+
+  sub merge_files ($self, $file_glob, $dest_file, $force) {
+    # $dest_file already exists, not replicating it
+    return if !$force && -f $dest_file;
+
+    say "Merging $file_glob to $dest_file (force:$force)... ";
+    my %jsons;
+    $jsons{$_} = _read_json_gz($_) for glob $file_glob;
+    my $merged_json = _merge_jsons(\%jsons);
+
+    say "Writing $dest_file";
+    open my $fd, '>:gzip', "$dest_file.tmp" or die "$dest_file.tmp: $!";
+    $merged_json = encode_json $merged_json;
+    print $fd $merged_json;
+    close $fd;
+    rename "$dest_file.tmp", $dest_file or die "$dest_file.tmp: $!";
+  }
+
+  sub _read_json_gz ($file_path) {
+      # TODO: Refactor to JSON helper package
+      say "Reading $file_path";
+      open my $fd, '<:gzip', $file_path or die "$file_path: $!";
+      my $json = decode_json <$fd>;
+      close $fd;
+      return $json;
+  }
+
+  sub _merge_jsons ($jsons) {
+    my %result;
+
+    my sub merge_scalars ($a, $b) {
+      die "Unable to merge $a and $b as they don't look like numbers"
+        unless looks_like_number($a) and looks_like_number($b);
+      return $a + $b;
+    }
+
+    my sub deep ($a, $b) {
+      my ($t, $t2) = (ref $a, ref $b);
+      die "Can't merge types $t and $t2" if $t ne $t2;
+
+      if ($t eq 'HASH') {
+        while (my ($key, $val ) = each %$b) {
+          if (!exists $a->{$key}) {
+            $a->{$key} = $val;
+          } elsif ($t eq 'SCALAR') {
+            $a->{$key} = merge_scalars $a->{$key}, $val;
+          }
+        }
+      }
+    }
+
+    deep \%result, $_ for values %$jsons;
+    return \%result;
   }
 
   sub _last_month_dates () {
@@ -406,26 +473,27 @@ package main {
     $out->write;
   }
 
-  sub replicate ($stats_dir, $partner_node) {
-    Foostats::Replicator->new(stats_dir => $stats_dir)->replicate($partner_node);
+  sub replicate_and_merge ($stats_dir, $partner_node) {
+    Foostats::Replicator->new(stats_dir => $stats_dir)->replicate_and_merge($partner_node);
   }
 
   sub pretty_print () { say 'pretty_print not yet implemented' }
 
-  my ($parse_logs, $replicate, $pretty_print);
+  my ($parse_logs, $replicate_and_merge, $pretty_print, $all);
 
   # With default values
   my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
   my $partner_node = hostname eq 'fishfinger.buetow.org' 
                    ? 'blowfish.buetow.org' : 'fishfinger.buetow.org';
 
-  GetOptions 'parse-logs'   => \$parse_logs,
-             'replicate'    => \$replicate,
-             'pretty-print' => \$pretty_print,
-             'stats-dir'    => \$stats_dir,
-             'partner-node' => \$partner_node;
+  GetOptions 'parse-logs'          => \$parse_logs,
+             'replicate_and_merge' => \$replicate_and_merge,
+             'pretty-print'        => \$pretty_print,
+             'all'                 => \$all,
+             'stats-dir'           => \$stats_dir,
+             'partner-node'        => \$partner_node;
 
-  parse_logs $stats_dir if $parse_logs;
-  replicate $stats_dir, $partner_node if $replicate;
-  pretty_print $stats_dir if $pretty_print;
+  parse_logs $stats_dir if $parse_logs or $all;
+  replicate_and_merge $stats_dir, $partner_node if $replicate_and_merge or $all;
+  pretty_print $stats_dir if $pretty_print or $all;
 }
