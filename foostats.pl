@@ -418,12 +418,6 @@ package main {
     $out->write;
   }
 
-  sub replicate ($stats_dir, $partner_node) {
-    Foostats::Replicator->new(stats_dir => $stats_dir)->replicate($partner_node);
-  }
-
-  sub report () { say 'report not yet implemented' }
-
   my ($parse_logs, $replicate, $report, $all);
 
   # With default values
@@ -439,6 +433,9 @@ package main {
              'partner-node' => \$partner_node;
 
   parse_logs $stats_dir if $parse_logs or $all;
-  replicate $stats_dir, $partner_node if $replicate or $all;
-  report $stats_dir if $report or $all;
+
+  Foostats::Replicator->new(stats_dir => $stats_dir)->replicate($partner_node)
+    if $replicate or $all;
+
+  die 'report not yet implemented' if $report or $all;
 }
