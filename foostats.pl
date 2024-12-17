@@ -20,6 +20,37 @@ no warnings qw(experimental::refaliasing);
 # 1) Implement replicator
 # 2) Write out a nice output from each merged file, also merge if multiple hosts results
 
+package FileHelper {
+  use JSON;
+
+  sub write ($path, $content) {
+    open my $fh, '>', "$path.tmp" or die "\nCannot open file: $!";
+    print $fh $content;
+    close $fh;
+
+    rename "$path.tmp", $path;
+  }
+
+  sub write_json_gz ($path, $data) {
+    my $json = encode_json $data;
+
+    say "Writing $path";
+    open my $fd, '>:gzip', "$path.tmp" or die "$path.tmp: $!";
+    print $fd $json;
+    close $fd;
+
+    rename "$path.tmp", $path or die "$path.tmp: $!";
+  }
+  
+  sub read_json_gz ($path) {
+    say "Reading $path";
+    open my $fd, '<:gzip', $path or die "$path: $!";
+    my $json = decode_json <$fd>;
+    close $fd;
+    return $json;
+  }
+}
+
 package Foostats::Logreader {
   use Digest::SHA3 'sha3_512_base64';
   use File::stat;
@@ -306,6 +337,7 @@ package Foostats::Outputter {
   sub new ($class, %args) {
     my $self = bless \%args, $class;
     mkdir $self->{stats_dir} or die $self->{stats_dir} . ": $!" unless -d $self->{stats_dir};
+
     return $self;
   }
 
@@ -313,25 +345,21 @@ package Foostats::Outputter {
     my $hostname = hostname();
     my @processed = glob $self->{stats_dir} . "/${proto}_????????.$hostname.json.gz";
     my ($date) = @processed ? ($processed[-1] =~ /_(\d{8})\.$hostname\.json.gz/) : 0;
+
     return int($date);
   }
 
-  sub write ($self) { $self->for_dates(\&write_json) }
-  sub for_dates ($self, $cb) { $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%* }
-
-  sub write_json ($self, $date_key, $stats) {
-    my $hostname = hostname();
-    my $path = $self->{stats_dir} . "/${date_key}.$hostname.json.gz";
-    my $json = encode_json $stats;
-
-    # TODO: Move code out to helper function DRY
-    say "Writing $path";
-    open my $fd, '>:gzip', "$path.tmp" or die "$path.tmp: $!";
-    print $fd $json;
-    close $fd;
-
-    rename "$path.tmp", $path or die "$path.tmp: $!";
-  } 
+  sub write ($self) {
+    $self->for_dates(sub ($self, $date_key, $stats) {
+      my $hostname = hostname();
+      my $path = $self->{stats_dir} . "/${date_key}.$hostname.json.gz";
+      FileHelper::write_json_gz $path, $stats;
+    });
+  }
+  
+  sub for_dates ($self, $cb) {
+    $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
+  }
 }
 
 package Foostats::Replicator {
@@ -351,43 +379,30 @@ package Foostats::Replicator {
 
       for my $date (_last_month_dates()) {
         my $file_base = "${proto}_${date}";
-        my $dest_file = "${file_base}.$partner_node.json.gz";
+        my $dest_path = "${file_base}.$partner_node.json.gz";
 
         $self->replicate_file(
-          "https://$partner_node/foostats/$dest_file", 
-          $self->{stats_dir} . '/' . $dest_file,
+          "https://$partner_node/foostats/$dest_path", 
+          $self->{stats_dir} . '/' . $dest_path,
           $count++ < 3, # Always replicate the newest 3 files.
         );
       }
     }
   }
 
-  sub replicate_file ($self, $remote_url, $dest_file, $force) {
-    # $dest_file already exists, not replicating it
-    return if !$force && -f $dest_file;
+  sub replicate_file ($self, $remote_url, $dest_path, $force) {
+    # $dest_path already exists, not replicating it
+    return if !$force && -f $dest_path;
 
-    say "Replicating $remote_url to $dest_file (force:$force)... ";
+    say "Replicating $remote_url to $dest_path (force:$force)... ";
     my $response = LWP::UserAgent->new->get($remote_url);
     unless ($response->is_success) {
       say "\nFailed to fetch the file: " . $response->status_line;
       return;
     }
 
-    open my $fh, '>', "$dest_file.tmp" or die "\nCannot open file: $!";
-    print $fh $response->decoded_content;
-    close $fh;
-
-    rename "$dest_file.tmp", $dest_file;
+    FileHelper::write $dest_path, $response->decoded_content;
     say 'done';
-  }
-
-   sub _read_json_gz ($file_path) {
-      # TODO: Refactor to JSON helper package
-      say "Reading $file_path";
-      open my $fd, '<:gzip', $file_path or die "$file_path: $!";
-      my $json = decode_json <$fd>;
-      close $fd;
-      return $json;
   }
 
   sub _last_month_dates () {
