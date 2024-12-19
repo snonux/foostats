@@ -12,8 +12,8 @@ use experimental qw(builtin);
 use feature qw(refaliasing);
 no warnings qw(experimental::refaliasing);
 
-# use diagnostics; 
-# use Data::Dumper;
+# TODO: UNDO
+use diagnostics; 
 
 # TODO: Blog post about this script and the new Perl features used.
 # TODO NEXT:
@@ -48,6 +48,22 @@ package FileHelper {
     my $json = decode_json <$fd>;
     close $fd;
     return $json;
+  }
+}
+
+package DateHelper {
+  use Time::Piece;
+
+  sub last_month_dates () {
+    my $today = localtime;
+    my @dates;
+
+    for my $days_ago (0..30) {
+      my $date = $today - ($days_ago * 24 * 60 * 60);
+      push @dates, $date->strftime('%Y%m%d');
+    }
+
+    return @dates;
   }
 }
 
@@ -365,32 +381,29 @@ package Foostats::Outputter {
 package Foostats::Replicator {
   use JSON;
   use File::Basename;
-  use Time::Piece;
   use LWP::UserAgent;
   use String::Util qw(endswith);
   
-  sub new ($class, %args) { bless \%args, $class }
-
-  sub replicate ($self, $partner_node) {
+  sub replicate ($stats_dir, $partner_node) {
     say "Replicating from $partner_node";
 
     for my $proto (qw(gemini web)) {
       my $count = 0;
 
-      for my $date (_last_month_dates()) {
+      for my $date (DateHelper::last_month_dates) {
         my $file_base = "${proto}_${date}";
         my $dest_path = "${file_base}.$partner_node.json.gz";
 
-        $self->replicate_file(
+        replicate_file(
           "https://$partner_node/foostats/$dest_path", 
-          $self->{stats_dir} . '/' . $dest_path,
+          "$stats_dir/$dest_path",
           $count++ < 3, # Always replicate the newest 3 files.
         );
       }
     }
   }
 
-  sub replicate_file ($self, $remote_url, $dest_path, $force) {
+  sub replicate_file ($remote_url, $dest_path, $force) {
     # $dest_path already exists, not replicating it
     return if !$force && -f $dest_path;
 
@@ -404,17 +417,70 @@ package Foostats::Replicator {
     FileHelper::write $dest_path, $response->decoded_content;
     say 'done';
   }
+}
 
-  sub _last_month_dates () {
-    my $today = localtime;
-    my @last_week;
+package Foostats::Reporter {
+  use Data::Dumper; # TODO: UNDO
 
-    for my $days_ago (0..30) {
-      my $date = $today - ($days_ago * 24 * 60 * 60);
-      push @last_week, $date->strftime('%Y%m%d');
+  sub report ($stats_dir) {
+    report_for_date($stats_dir, $_) for DateHelper::last_month_dates;
+  }
+
+  sub report_for_date ($stats_dir, $date) {
+    my @stats = stats_for_date($stats_dir, $date);
+    print Dumper report_feed_subscribers(@stats);
+  }
+
+  sub merge_ips ($a, $b) {
+    my sub merge ($a, $b) {
+      while (my ($key, $val) = each %$b) {
+        $a->{$key} //= 0;
+        $a->{$key} += $val;
+      }
     }
 
-    return @last_week;
+    while (my ($key, $val) = each %$b) {
+      if (not exists $a->{$key}) {
+        $a->{$key} = $val;
+      } elsif (ref($a->{$key}) eq 'HASH' && ref($val) eq 'HASH') {
+        merge($a->{$key}, $val);
+      } else {
+        die "Unable to merge $a and $b";
+      }
+    }
+ }
+
+  sub report_feed_subscribers (@stats) {
+    my (%gemini, %web);
+    
+    for my $stats (@stats) {
+      my $merge = $stats->{proto} eq 'web' ? \%web : \%gemini;
+      merge_ips($merge, $stats->{feed_ips});
+    }
+
+    my %report = (
+      'Feed subscribers' => {
+        'Web' => Dumper %web,
+      }
+    );
+
+
+    return %report;
+  }
+
+  sub stats_for_date ($stats_dir, $date) {
+    my @stats;
+
+    for my $proto (qw(gemini web)) {
+      for my $path (<$stats_dir/${proto}_${date}.*.json.gz>) {
+        push @stats, FileHelper::read_json_gz($path);
+        # TODO: Is there a shortcut?
+        $stats[-1]->{proto} = $proto;
+        $stats[-1]->{path} = $path;
+      }
+    }
+
+    return @stats;
   }
 }
 
@@ -440,17 +506,15 @@ package main {
   my $partner_node = hostname eq 'fishfinger.buetow.org' 
                    ? 'blowfish.buetow.org' : 'fishfinger.buetow.org';
 
+  # TODO: Add help output
   GetOptions 'parse-logs'   => \$parse_logs,
              'replicate'    => \$replicate,
-             'pretty-print' => \$report,
+             'report'       => \$report,
              'all'          => \$all,
              'stats-dir'    => \$stats_dir,
              'partner-node' => \$partner_node;
 
   parse_logs $stats_dir if $parse_logs or $all;
-
-  Foostats::Replicator->new(stats_dir => $stats_dir)->replicate($partner_node)
-    if $replicate or $all;
-
-  die 'report not yet implemented' if $report or $all;
+  Foostats::Replicator::replicate($stats_dir, $partner_node) if $replicate or $all;
+  Foostats::Reporter::report($stats_dir) if $report or $all;
 }
