@@ -345,7 +345,7 @@ package Foostats::Aggregator {
   }
 }
 
-package Foostats::Outputter {
+package Foostats::FileOutputter {
   use JSON;
   use Sys::Hostname;      
   use PerlIO::gzip;
@@ -428,7 +428,9 @@ package Foostats::Reporter {
 
   sub report_for_date ($stats_dir, $date) {
     my @stats = stats_for_date($stats_dir, $date);
-    print Dumper report_feed_subscribers(@stats);
+    my %data = report_feed_subscribers(@stats);
+
+    printf "%s: Total:%d\n", $date, $data{Total};
   }
 
   sub merge_ips ($a, $b) {
@@ -445,27 +447,32 @@ package Foostats::Reporter {
       } elsif (ref($a->{$key}) eq 'HASH' && ref($val) eq 'HASH') {
         merge($a->{$key}, $val);
       } else {
-        die "Unable to merge $a and $b";
+        printf "Not merging key '%s': '%s' with '%s'", $key, $a->{$key}, $val;
       }
     }
  }
 
   sub report_feed_subscribers (@stats) {
     my (%gemini, %web);
-    
+
     for my $stats (@stats) {
       my $merge = $stats->{proto} eq 'web' ? \%web : \%gemini;
       merge_ips($merge, $stats->{feed_ips});
-    }
+   }
 
-    my %report = (
-      'Feed subscribers' => {
-        'Web' => Dumper %web,
-      }
+    my %total;
+    merge_ips(\%total, $web{$_}) for keys %web;
+    merge_ips(\%total, $gemini{$_}) for keys %gemini;
+
+    my %data = (
+      'Total'          => scalar keys %total,
+      'Gemini Gemfeed' => scalar keys $gemini{gemfeed}->%*,
+      'Gemini Atom'    => scalar keys $gemini{atom_feed}->%*,
+      'Web Gemfeed'    => scalar keys $web{gemfeed}->%*,
+      'Web Atom'       => scalar keys $web{atom_feed}->%*,
     );
 
-
-    return %report;
+    return %data;
   }
 
   sub stats_for_date ($stats_dir, $date) {
@@ -489,7 +496,7 @@ package main {
   use Sys::Hostname;
 
   sub parse_logs ($stats_dir) {
-    my $out = Foostats::Outputter->new(stats_dir => $stats_dir);
+    my $out = Foostats::FileOutputter->new(stats_dir => $stats_dir);
 
     $out->{stats} = Foostats::Logreader::parse_logs(
       $out->last_processed_date('web'),
@@ -507,12 +514,12 @@ package main {
                    ? 'blowfish.buetow.org' : 'fishfinger.buetow.org';
 
   # TODO: Add help output
-  GetOptions 'parse-logs'   => \$parse_logs,
-             'replicate'    => \$replicate,
-             'report'       => \$report,
-             'all'          => \$all,
-             'stats-dir'    => \$stats_dir,
-             'partner-node' => \$partner_node;
+  GetOptions 'parse-logs!'    => \$parse_logs,
+             'replicate!'     => \$replicate,
+             'report!'        => \$report,
+             'all!'           => \$all,
+             'stats-dir=s'    => \$stats_dir,
+             'partner-node=s' => \$partner_node;
 
   parse_logs $stats_dir if $parse_logs or $all;
   Foostats::Replicator::replicate($stats_dir, $partner_node) if $replicate or $all;
