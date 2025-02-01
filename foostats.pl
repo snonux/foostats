@@ -423,14 +423,18 @@ package Foostats::Reporter {
   use Data::Dumper; # TODO: UNDO
 
   sub report ($stats_dir) {
-    report_for_date($stats_dir, $_) for DateHelper::last_month_dates;
+    my @report;
+    push @report, report_for_date($stats_dir, $_) for DateHelper::last_month_dates;
+    local $, = "\n";
+    print @report;
   }
 
   sub report_for_date ($stats_dir, $date) {
+    printf "Reporting for date %s\n", $date;
     my @stats = stats_for_date($stats_dir, $date);
     my %data = report_feed_subscribers(@stats);
 
-    printf "%s: Total:%d\n", $date, $data{Total};
+    return sprintf "%s: Total subscribers:%d", $date, $data{Total};
   }
 
   sub merge_ips ($a, $b) {
@@ -441,24 +445,33 @@ package Foostats::Reporter {
       }
     }
 
+    my $is_num = qr/^\d+(\.\d+)?$/;
+
     while (my ($key, $val) = each %$b) {
       if (not exists $a->{$key}) {
         $a->{$key} = $val;
+
       } elsif (ref($a->{$key}) eq 'HASH' && ref($val) eq 'HASH') {
         merge($a->{$key}, $val);
+
+      } elsif ($a->{$key} =~ $is_num && $val =~ $is_num) {
+        $a->{$key} += $val;
+
       } else {
-        printf "Not merging key '%s': '%s' with '%s'", $key, $a->{$key}, $val;
+        die "Not merging key '%s' (ref:%s): '%s' (ref:%s) with '%s' (ref:%s)\n",
+          $key, ref($key), $a->{$key}, ref($a->{$key}), $val, ref($val);
       }
     }
- }
+  }
 
   sub report_feed_subscribers (@stats) {
     my (%gemini, %web);
 
     for my $stats (@stats) {
       my $merge = $stats->{proto} eq 'web' ? \%web : \%gemini;
+      printf "Merging proto %s feed IPs\n", $stats->{proto};
       merge_ips($merge, $stats->{feed_ips});
-   }
+    }
 
     my %total;
     merge_ips(\%total, $web{$_}) for keys %web;
@@ -480,6 +493,7 @@ package Foostats::Reporter {
 
     for my $proto (qw(gemini web)) {
       for my $path (<$stats_dir/${proto}_${date}.*.json.gz>) {
+        # printf "Reading %s\n", $path;
         push @stats, FileHelper::read_json_gz($path);
         # TODO: Is there a shortcut?
         $stats[-1]->{proto} = $proto;
