@@ -17,7 +17,7 @@ use diagnostics;
 
 # TODO: Blog post about this script and the new Perl features used.
 # TODO NEXT:
-# 1) Implement replicator
+# 1) Site stats
 # 2) Write out a nice output from each merged file, also merge if multiple hosts results
 
 package FileHelper {
@@ -423,18 +423,21 @@ package Foostats::Reporter {
   use Data::Dumper; # TODO: UNDO
 
   sub report ($stats_dir) {
-    my @report;
-    push @report, report_for_date($stats_dir, $_) for DateHelper::last_month_dates;
-    local $, = "\n";
-    print @report;
+    my %report;
+    $report{$_} = report_for_date($stats_dir, $_) for DateHelper::last_month_dates;
+    print Dumper %report;
   }
 
   sub report_for_date ($stats_dir, $date) {
     printf "Reporting for date %s\n", $date;
-    my @stats = stats_for_date($stats_dir, $date);
-    my %data = report_feed_subscribers(@stats);
 
-    return sprintf "%s: Total subscribers:%d", $date, $data{Total};
+    my @stats = stats_for_date($stats_dir, $date);
+    my %report = (
+      feed_subscribers => feed_subscribers(@stats),
+      # TODO: Page views stats
+    );
+
+    return \%report;
   }
 
   sub merge_ips ($a, $b) {
@@ -464,7 +467,7 @@ package Foostats::Reporter {
     }
   }
 
-  sub report_feed_subscribers (@stats) {
+  sub feed_subscribers (@stats) {
     my (%gemini, %web);
 
     for my $stats (@stats) {
@@ -477,7 +480,7 @@ package Foostats::Reporter {
     merge_ips(\%total, $web{$_}) for keys %web;
     merge_ips(\%total, $gemini{$_}) for keys %gemini;
 
-    my %data = (
+    my %report = (
       'Total'          => scalar keys %total,
       'Gemini Gemfeed' => scalar keys $gemini{gemfeed}->%*,
       'Gemini Atom'    => scalar keys $gemini{atom_feed}->%*,
@@ -485,7 +488,7 @@ package Foostats::Reporter {
       'Web Atom'       => scalar keys $web{atom_feed}->%*,
     );
 
-    return %data;
+    return \%report;
   }
 
   sub stats_for_date ($stats_dir, $date) {
@@ -493,11 +496,9 @@ package Foostats::Reporter {
 
     for my $proto (qw(gemini web)) {
       for my $path (<$stats_dir/${proto}_${date}.*.json.gz>) {
-        # printf "Reading %s\n", $path;
+        printf "Reading %s\n", $path;
         push @stats, FileHelper::read_json_gz($path);
-        # TODO: Is there a shortcut?
-        $stats[-1]->{proto} = $proto;
-        $stats[-1]->{path} = $path;
+        @{$stats[-1]}{qw(proto path)} = ($proto, $path);
       }
     }
 
@@ -524,8 +525,7 @@ package main {
 
   # With default values
   my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
-  my $partner_node = hostname eq 'fishfinger.buetow.org' 
-                   ? 'blowfish.buetow.org' : 'fishfinger.buetow.org';
+  my $partner_node = hostname eq 'fishfinger.buetow.org'  ? 'blowfish.buetow.org' : 'fishfinger.buetow.org';
 
   # TODO: Add help output
   GetOptions 'parse-logs!'    => \$parse_logs,
