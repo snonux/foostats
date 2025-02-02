@@ -17,8 +17,9 @@ use diagnostics;
 
 # TODO: Blog post about this script and the new Perl features used.
 # TODO NEXT:
-# 1) Site stats
-# 2) Write out a nice output from each merged file, also merge if multiple hosts results
+# * Write out a nice output from each merged file, also merge if multiple hosts results
+# * Fix bug with .gmi.*.gmi in the log parser
+# * Nicely formatted .txt output by stats by count by date
 
 package FileHelper {
   use JSON;
