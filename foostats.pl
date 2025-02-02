@@ -433,8 +433,9 @@ package Foostats::Reporter {
 
     my @stats = stats_for_date($stats_dir, $date);
     my %report = (
-      feed_subscribers => feed_subscribers(@stats),
-      # TODO: Page views stats
+      feed_ips => feed_ips(@stats),
+      count    => count(@stats),
+      page_ips => page_ips(@stats),
     );
 
     return \%report;
@@ -467,7 +468,7 @@ package Foostats::Reporter {
     }
   }
 
-  sub feed_subscribers (@stats) {
+  sub feed_ips (@stats) {
     my (%gemini, %web);
 
     for my $stats (@stats) {
@@ -489,6 +490,30 @@ package Foostats::Reporter {
     );
 
     return \%report;
+  }
+
+  sub count (@stats) {
+    my %report; 
+
+    for my $stats (@stats) {
+      next unless exists $stats->{count};
+
+      while (my ($key, $val) = each $stats->{count}->%*) {
+        $report{$key} //= 0;
+        $report{$key} += $val;
+      }
+    }
+
+    return \%report;
+  }
+
+  sub page_ips (@stats) {
+     my %report = ();
+
+     for my $stats (@stats) {
+     }
+
+     return \%report;     
   }
 
   sub stats_for_date ($stats_dir, $date) {
