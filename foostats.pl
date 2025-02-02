@@ -419,29 +419,27 @@ package Foostats::Replicator {
   }
 }
 
-package Foostats::Reporter {
+package Foostats::Merger {
   use Data::Dumper; # TODO: UNDO
 
-  sub report ($stats_dir) {
-    my %report;
-    $report{$_} = report_for_date($stats_dir, $_) for DateHelper::last_month_dates;
-    print Dumper %report;
+  sub merge ($stats_dir) {
+    my %merge;
+    $merge{$_} = merge_for_date($stats_dir, $_) for DateHelper::last_month_dates;
+    print Dumper %merge;
   }
 
-  sub report_for_date ($stats_dir, $date) {
-    printf "Reporting for date %s\n", $date;
+  sub merge_for_date ($stats_dir, $date) {
+    printf "Merging for date %s\n", $date;
 
     my @stats = stats_for_date($stats_dir, $date);
-    my %report = (
+    return {
       feed_ips => feed_ips(@stats),
       count    => count(@stats),
       page_ips => page_ips(@stats),
-    );
-
-    return \%report;
+    };
   }
 
-  sub merge_ips ($a, $b) {
+  sub merge_ips ($a, $b, $key_transform = undef) {
     my sub merge ($a, $b) {
       while (my ($key, $val) = each %$b) {
         $a->{$key} //= 0;
@@ -452,17 +450,16 @@ package Foostats::Reporter {
     my $is_num = qr/^\d+(\.\d+)?$/;
 
     while (my ($key, $val) = each %$b) {
+      $key = $key_transform->($key) if defined $key_transform;
+      
       if (not exists $a->{$key}) {
         $a->{$key} = $val;
-
       } elsif (ref($a->{$key}) eq 'HASH' && ref($val) eq 'HASH') {
         merge($a->{$key}, $val);
-
       } elsif ($a->{$key} =~ $is_num && $val =~ $is_num) {
         $a->{$key} += $val;
-
       } else {
-        die "Not merging key '%s' (ref:%s): '%s' (ref:%s) with '%s' (ref:%s)\n",
+        die "Not merging tkey '%s' (ref:%s): '%s' (ref:%s) with '%s' (ref:%s)\n",
           $key, ref($key), $a->{$key}, ref($a->{$key}), $val, ref($val);
       }
     }
@@ -481,7 +478,7 @@ package Foostats::Reporter {
     merge_ips(\%total, $web{$_}) for keys %web;
     merge_ips(\%total, $gemini{$_}) for keys %gemini;
 
-    my %report = (
+    my %merge = (
       'Total'          => scalar keys %total,
       'Gemini Gemfeed' => scalar keys $gemini{gemfeed}->%*,
       'Gemini Atom'    => scalar keys $gemini{atom_feed}->%*,
@@ -489,31 +486,37 @@ package Foostats::Reporter {
       'Web Atom'       => scalar keys $web{atom_feed}->%*,
     );
 
-    return \%report;
+    return \%merge;
   }
 
   sub count (@stats) {
-    my %report; 
+    my %merge; 
 
     for my $stats (@stats) {
-      next unless exists $stats->{count};
-
       while (my ($key, $val) = each $stats->{count}->%*) {
-        $report{$key} //= 0;
-        $report{$key} += $val;
+        $merge{$key} //= 0;
+        $merge{$key} += $val;
       }
     }
 
-    return \%report;
+    return \%merge;
   }
 
   sub page_ips (@stats) {
-     my %report = ();
+     my %merge = (urls => {}, hosts => {});
 
-     for my $stats (@stats) {
+     for my $key (keys %merge) {
+       merge_ips($merge{$key}, $_->{page_ips}->{$key}, sub ($key) {
+         $key =~ s/\.html$/.../;
+         $key =~ s/\.gmi$/.../;
+         $key;
+       }) for @stats;
+
+       # Keep only uniq IP count
+       $merge{$key}->{$_} = scalar keys $merge{$key}->{$_}->%* for keys $merge{$key}->%*;
      }
 
-     return \%report;     
+     return \%merge;
   }
 
   sub stats_for_date ($stats_dir, $date) {
@@ -546,7 +549,7 @@ package main {
     $out->write;
   }
 
-  my ($parse_logs, $replicate, $report, $all);
+  my ($parse_logs, $replicate, $merge, $all);
 
   # With default values
   my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
@@ -555,12 +558,12 @@ package main {
   # TODO: Add help output
   GetOptions 'parse-logs!'    => \$parse_logs,
              'replicate!'     => \$replicate,
-             'report!'        => \$report,
+             'merge!'         => \$merge,
              'all!'           => \$all,
              'stats-dir=s'    => \$stats_dir,
              'partner-node=s' => \$partner_node;
 
   parse_logs $stats_dir if $parse_logs or $all;
   Foostats::Replicator::replicate($stats_dir, $partner_node) if $replicate or $all;
-  Foostats::Reporter::report($stats_dir) if $report or $all;
+  Foostats::Merger::merge($stats_dir) if $merge or $all;
 }
