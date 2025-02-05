@@ -20,6 +20,7 @@ use diagnostics;
 # * Write out a nice output from each merged file, also merge if multiple hosts results
 # * Fix bug with .gmi.*.gmi in the log parser
 # * Nicely formatted .txt output by stats by count by date
+# * Print out all UAs, to add new excludes/blocked IPs
 
 package FileHelper {
   use JSON;
@@ -426,7 +427,7 @@ package Foostats::Merger {
   sub merge ($stats_dir) {
     my %merge;
     $merge{$_} = merge_for_date($stats_dir, $_) for DateHelper::last_month_dates;
-    print Dumper %merge;
+    return %merge;
   }
 
   sub merge_for_date ($stats_dir, $date) {
@@ -535,6 +536,14 @@ package Foostats::Merger {
   }
 }
 
+package Foostats::Reporter {
+  use Data::Dumper;
+
+  sub report (%merged) {
+    print Dumper %merged;  
+  }
+}
+
 package main {
   use Getopt::Long;
   use Sys::Hostname;
@@ -550,7 +559,7 @@ package main {
     $out->write;
   }
 
-  my ($parse_logs, $replicate, $merge, $all);
+  my ($parse_logs, $replicate, $report, $all);
 
   # With default values
   my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
@@ -559,12 +568,12 @@ package main {
   # TODO: Add help output
   GetOptions 'parse-logs!'    => \$parse_logs,
              'replicate!'     => \$replicate,
-             'merge!'         => \$merge,
+             'report!'        => \$report,
              'all!'           => \$all,
              'stats-dir=s'    => \$stats_dir,
              'partner-node=s' => \$partner_node;
 
   parse_logs $stats_dir if $parse_logs or $all;
   Foostats::Replicator::replicate($stats_dir, $partner_node) if $replicate or $all;
-  Foostats::Merger::merge($stats_dir) if $merge or $all;
+  Foostats::Reporter::report(Foostats::Merger::merge($stats_dir)) if $report or $all;
 }
