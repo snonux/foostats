@@ -51,6 +51,14 @@ package FileHelper {
         close $fd;
         return $json;
     }
+
+    sub read_lines ($path) {
+        my @lines;
+        open( my $fh, '<', $path ) or die "$path: $!";
+        chomp( @lines = <$fh> );
+        close($fh);
+        return @lines;
+    }
 }
 
 package DateHelper {
@@ -211,8 +219,8 @@ package Foostats::Logreader {
         };
     }
 
-    sub parse_logs ( $last_web_date, $last_gemini_date ) {
-        my $agg = Foostats::Aggregator->new;
+    sub parse_logs ( $last_web_date, $last_gemini_date, $odds_file ) {
+        my $agg = Foostats::Aggregator->new($odds_file);
 
         say "Last web date: $last_web_date";
         say "Last gemini date: $last_gemini_date";
@@ -224,19 +232,15 @@ package Foostats::Logreader {
     }
 }
 
+# TODO: Write filter summary at the end of the filter log.
 package Foostats::Filter {
     use String::Util qw(contains startswith endswith);
-    use constant WARN_ODD => false;
 
-    sub new ($class) {
-        bless {
-            odds => [
-                qw(
-                  .php wordpress /wp .asp .. robots.txt .env + % HNAP1 /admin
-                  .git microsoft.exchange .lua /owa/
-                )
-            ]
-        }, $class;
+    sub new ( $class, $odds_file, $log_path = '/var/log/foostats-filter.log' ) {
+        say "Logging filter to $log_path";
+        my @odds = FileHelper::read_lines($odds_file);
+        unlink $log_path if -f $log_path;
+        bless { odds => \@odds, log_path => $log_path }, $class;
     }
 
     sub ok ( $self, $event ) {
@@ -256,15 +260,28 @@ package Foostats::Filter {
         \my $uri_path = \$event->{uri_path};
 
         for ( $self->{odds}->@* ) {
-            if ( contains( $uri_path, $_ ) ) {
-                say STDERR
-"Warn: $uri_path contains $_ and is odd and will therefore be blocked!"
-                  if WARN_ODD;
-                return true;
-            }
+            next unless contains( $uri_path, $_ );
+
+            $self->log( 'WARN', $uri_path,
+                "contains $_ and is odd and will therefore be blocked!" );
+            return true;
         }
 
+        $self->log( 'OK', $uri_path, "appears fine..." );
         return false;
+    }
+
+    sub log ( $self, $severity, $subject, $message ) {
+        state %dedup;
+
+        # Don't log if path was already logged
+        return if exists $dedup{$subject};
+        $dedup{$subject} = 1;
+
+        open( my $fh, '>>', $self->{log_path} )
+          or die $self->{log_path} . ": $!";
+        print $fh "$severity: $subject $message\n";
+        close($fh);
     }
 
     sub excessive ( $self, $event ) {
@@ -282,8 +299,8 @@ package Foostats::Filter {
 
         # IP requested site more than once within the same second!?
         if ( 1 < ++( $count{$ip_hash} //= 0 ) ) {
-            say STDERR "Warn: $ip_hash blocked due to excessive requesting..."
-              if WARN_ODD;
+            $self->log( 'WARN', $ip_hash,
+                "blocked due to excessive requesting..." );
             return true;
         }
 
@@ -300,8 +317,9 @@ package Foostats::Aggregator {
         GEMFEED_URI_2 => '/gemfeed/',
     };
 
-    sub new ($class) {
-        bless { filter => Foostats::Filter->new, stats => {} }, $class;
+    sub new ( $class, $odds_file ) {
+        bless { filter => Foostats::Filter->new($odds_file), stats => {} },
+          $class;
     }
 
     sub add ( $self, $event ) {
@@ -589,13 +607,12 @@ package main {
     use Getopt::Long;
     use Sys::Hostname;
 
-    sub parse_logs ($stats_dir) {
+    sub parse_logs ( $stats_dir, $odds_file ) {
         my $out = Foostats::FileOutputter->new( stats_dir => $stats_dir );
 
-        $out->{stats} = Foostats::Logreader::parse_logs(
-            $out->last_processed_date('web'),
-            $out->last_processed_date('gemini'),
-        );
+        $out->{stats} =
+          Foostats::Logreader::parse_logs( $out->last_processed_date('web'),
+            $out->last_processed_date('gemini'), $odds_file, );
 
         $out->write;
     }
@@ -604,6 +621,7 @@ package main {
 
     # With default values
     my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
+    my $odds_file = $stats_dir . '/odds.txt';
     my $partner_node =
       hostname eq 'fishfinger.buetow.org'
       ? 'blowfish.buetow.org'
@@ -612,13 +630,14 @@ package main {
     # TODO: Add help output
     GetOptions
       'parse-logs!'    => \$parse_logs,
+      'odds-file=s'    => \$odds_file,
       'replicate!'     => \$replicate,
       'report!'        => \$report,
       'all!'           => \$all,
       'stats-dir=s'    => \$stats_dir,
       'partner-node=s' => \$partner_node;
 
-    parse_logs $stats_dir if $parse_logs or $all;
+    parse_logs( $stats_dir, $odds_file ) if $parse_logs or $all;
     Foostats::Replicator::replicate( $stats_dir, $partner_node )
       if $replicate or $all;
     Foostats::Reporter::report( Foostats::Merger::merge($stats_dir) )
