@@ -1,0 +1,16 @@
+%
++
+..
+/admin
+.asp
+.env
+.git
+HNAP1
+.lua
+microsoft.exchange
+/owa/
+.php
+robots.txt
+wordpress
+/wp
+.rar
