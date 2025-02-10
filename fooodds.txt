@@ -14,3 +14,10 @@ robots.txt
 wordpress
 /wp
 .rar
+/config.json
+/sitemap.xml
+/actuator/health
+/portal/redlion
+/SDK
+/bin/sh
+.js
