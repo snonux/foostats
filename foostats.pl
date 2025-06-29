@@ -689,6 +689,28 @@ package main {
     use Getopt::Long;
     use Sys::Hostname;
 
+    sub usage {
+        print <<~"USAGE";
+        Usage: $0 [options]
+
+        Options:
+          --parse-logs              Parse web and gemini logs.
+          --replicate               Replicate stats from partner node.
+          --report                  Generate a report from the stats.
+          --all                     Perform all of the above actions (parse, replicate, report).
+          --stats-dir <path>        Directory to store stats files.
+                                    Default: /var/www/htdocs/buetow.org/self/foostats
+          --odds-file <path>        File with odd URI patterns to filter.
+                                    Default: <stats-dir>/fooodds.txt
+          --filter-log <path>       Log file for filtered requests.
+                                    Default: /var/log/fooodds
+          --partner-node <hostname> Hostname of the partner node for replication.
+                                    Default: fishfinger.buetow.org or blowfish.buetow.org
+          --help                    Show this help message.
+        USAGE
+        exit 0;
+    }
+
     sub parse_logs ( $stats_dir, $odds_file, $odds_log ) {
         my $out = Foostats::FileOutputter->new( stats_dir => $stats_dir );
 
@@ -701,7 +723,7 @@ package main {
         $out->write;
     }
 
-    my ( $parse_logs, $replicate, $report, $all );
+    my ( $parse_logs, $replicate, $report, $all, $help );
 
     # With default values
     my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
@@ -712,7 +734,6 @@ package main {
       ? 'blowfish.buetow.org'
       : 'fishfinger.buetow.org';
 
-    # TODO: Add help output
     GetOptions
       'parse-logs!'    => \$parse_logs,
       'filter-log=s'   => \$odds_log,
@@ -721,7 +742,10 @@ package main {
       'report!'        => \$report,
       'all!'           => \$all,
       'stats-dir=s'    => \$stats_dir,
-      'partner-node=s' => \$partner_node;
+      'partner-node=s' => \$partner_node,
+      'help|?'         => \$help;
+
+    usage() if $help;
 
     parse_logs( $stats_dir, $odds_file, $odds_log )
       if $parse_logs
