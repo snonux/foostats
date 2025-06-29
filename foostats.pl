@@ -821,6 +821,12 @@ package Foostats::Reporter {
             }
             $report_content .= "
 ";
+            
+            # Add link to monthly report
+            $report_content .= "## Related Reports\n\n";
+            my $today = localtime;
+            my $current_month = $today->strftime('%Y%m%d');
+            $report_content .= "=> ./30day_summary_$current_month.gmi 30-Day Summary Report\n\n";
 
             my $report_path = "$stats_dir/$date.gmi";
             say "Writing report to $report_path";
@@ -829,6 +835,9 @@ package Foostats::Reporter {
         
         # Generate 30-day summary report
         generate_30day_report($stats_dir, %merged);
+        
+        # Generate yearly report
+        generate_yearly_report($stats_dir, %merged);
     }
 
     sub generate_30day_report {
@@ -998,9 +1007,207 @@ package Foostats::Reporter {
 ";
         }
         
+        # Add link to yearly report
+        $report_content .= "\n## Related Reports\n\n";
+        my $year = $today->strftime('%Y');
+        $report_content .= "=> ./yearly_summary_$year.gmi Yearly Summary Report\n";
+        
         # Write the 30-day report
         my $report_path = "$stats_dir/30day_summary_$report_date.gmi";
         say "Writing 30-day summary report to $report_path";
+        FileHelper::write( $report_path, $report_content );
+    }
+    
+    sub generate_yearly_report {
+        my ( $stats_dir, %merged ) = @_;
+        
+        # Get all available dates
+        my @all_dates = sort { $a cmp $b } keys %merged;
+        
+        # Filter to only dates that have data
+        @all_dates = grep { exists $merged{$_} && $merged{$_}->{count} } @all_dates;
+        
+        return unless @all_dates; # No data available
+        
+        my $today = localtime;
+        my $current_year = $today->strftime('%Y');
+        
+        # Count total days with data
+        my $total_days = scalar @all_dates;
+        
+        my $report_content = "# Yearly Summary Report\n";
+        $report_content .= "## Generated on " . $today->strftime('%Y-%m-%d') . "\n\n";
+        $report_content .= "## Report covers $total_days days of data\n\n";
+        
+        # Monthly aggregation
+        my %monthly_stats;
+        
+        for my $date (@all_dates) {
+            my $stats = $merged{$date};
+            next unless $stats->{count};
+            
+            my ( $year, $month, $day ) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+            my $month_key = "$year-$month";
+            
+            # Initialize monthly stats
+            $monthly_stats{$month_key} //= {
+                total_requests => 0,
+                filtered => 0,
+                gemini => 0,
+                web => 0,
+                ipv4 => 0,
+                ipv6 => 0,
+                feed_total => 0,
+                gem_feed => 0,
+                gem_atom => 0,
+                web_feed => 0,
+                web_atom => 0,
+                days => 0
+            };
+            
+            my $ms = $monthly_stats{$month_key};
+            $ms->{days}++;
+            
+            # Aggregate counts
+            $ms->{total_requests} += ($stats->{count}{gemini} // 0) + ($stats->{count}{web} // 0);
+            $ms->{filtered} += $stats->{count}{filtered} // 0;
+            $ms->{gemini} += $stats->{count}{gemini} // 0;
+            $ms->{web} += $stats->{count}{web} // 0;
+            $ms->{ipv4} += $stats->{count}{IPv4} // 0;
+            $ms->{ipv6} += $stats->{count}{IPv6} // 0;
+            
+            # Aggregate feed stats
+            if ($stats->{feed_ips}) {
+                $ms->{feed_total} += $stats->{feed_ips}{'Total'} // 0;
+                $ms->{gem_feed} += $stats->{feed_ips}{'Gemini Gemfeed'} // 0;
+                $ms->{gem_atom} += $stats->{feed_ips}{'Gemini Atom'} // 0;
+                $ms->{web_feed} += $stats->{feed_ips}{'Web Gemfeed'} // 0;
+                $ms->{web_atom} += $stats->{feed_ips}{'Web Atom'} // 0;
+            }
+        }
+        
+        # Summary section - monthly evolution
+        $report_content .= "## Monthly Summary Evolution\n\n";
+        $report_content .= "### Total Requests by Month\n\n```\n";
+        
+        my @summary_rows;
+        for my $month (sort keys %monthly_stats) {
+            my $ms = $monthly_stats{$month};
+            push @summary_rows, [
+                $month,
+                $ms->{days},
+                $ms->{total_requests},
+                $ms->{filtered},
+                $ms->{gemini},
+                $ms->{web},
+                $ms->{ipv4},
+                $ms->{ipv6}
+            ];
+        }
+        
+        $report_content .= format_table(
+            [ 'Month', 'Days', 'Total', 'Filtered', 'Gemini', 'Web', 'IPv4', 'IPv6' ],
+            \@summary_rows
+        );
+        $report_content .= "\n```\n\n";
+        
+        # Feed statistics by month
+        $report_content .= "### Feed Statistics by Month\n\n```\n";
+        
+        my @feed_rows;
+        for my $month (sort keys %monthly_stats) {
+            my $ms = $monthly_stats{$month};
+            push @feed_rows, [
+                $month,
+                $ms->{feed_total},
+                $ms->{gem_feed},
+                $ms->{gem_atom},
+                $ms->{web_feed},
+                $ms->{web_atom}
+            ];
+        }
+        
+        $report_content .= format_table(
+            [ 'Month', 'Total', 'Gem Feed', 'Gem Atom', 'Web Feed', 'Web Atom' ],
+            \@feed_rows
+        );
+        $report_content .= "\n```\n\n";
+        
+        # Aggregate hosts and URLs for entire period
+        my %all_hosts;
+        my %all_urls;
+        
+        for my $date (@all_dates) {
+            my $stats = $merged{$date};
+            next unless $stats->{page_ips};
+            
+            # Aggregate hosts
+            while (my ($host, $count) = each %{$stats->{page_ips}{hosts}}) {
+                $all_hosts{$host} //= 0;
+                $all_hosts{$host} += $count;
+            }
+            
+            # Aggregate URLs
+            while (my ($url, $count) = each %{$stats->{page_ips}{urls}}) {
+                $all_urls{$url} //= 0;
+                $all_urls{$url} += $count;
+            }
+        }
+        
+        # Top 50 hosts
+        $report_content .= "## Top 50 Hosts (Yearly Total)\n\n```\n";
+        
+        my @host_rows;
+        my @sorted_hosts = sort { $all_hosts{$b} <=> $all_hosts{$a} } keys %all_hosts;
+        @sorted_hosts = @sorted_hosts[0..49] if @sorted_hosts > 50;
+        
+        for my $host (@sorted_hosts) {
+            push @host_rows, [ $host, $all_hosts{$host} ];
+        }
+        
+        $report_content .= format_table(
+            [ 'Host', 'Total Unique Visitors' ],
+            \@host_rows
+        );
+        $report_content .= "\n```\n\n";
+        
+        # Top 50 URLs
+        $report_content .= "## Top 50 URLs (Yearly Total)\n\n```\n";
+        
+        my @url_rows;
+        my @sorted_urls = sort { $all_urls{$b} <=> $all_urls{$a} } keys %all_urls;
+        @sorted_urls = @sorted_urls[0..49] if @sorted_urls > 50;
+        
+        for my $url (@sorted_urls) {
+            push @url_rows, [ $url, $all_urls{$url} ];
+        }
+        
+        $report_content .= format_table(
+            [ 'URL', 'Total Unique Visitors' ],
+            \@url_rows
+        );
+        $report_content .= "\n```\n\n";
+        
+        # Links to monthly reports
+        $report_content .= "## Monthly Reports\n\n";
+        
+        # Get list of all 30-day summary reports
+        my @monthly_reports = glob "$stats_dir/30day_summary_*.gmi";
+        @monthly_reports = sort { $b cmp $a } @monthly_reports;
+        
+        for my $report_path (@monthly_reports) {
+            my ($date) = $report_path =~ /30day_summary_(\d{8})\.gmi$/;
+            next unless $date;
+            
+            my ( $year, $month, $day ) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+            my $formatted_date = "$year-$month-$day";
+            
+            $report_content .= "=> ./30day_summary_$date.gmi 30-Day Summary for $formatted_date\n";
+        }
+        
+        # Write the yearly report
+        my $report_path = "$stats_dir/yearly_summary_$current_year.gmi";
+        say "Writing yearly summary report to $report_path";
         FileHelper::write( $report_path, $report_content );
     }
 }
