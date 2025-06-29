@@ -678,12 +678,155 @@ package Foostats::Merger {
 }
 
 package Foostats::Reporter {
-    use Data::Dumper;
+    sub format_table {
+        my ($headers, $rows) = @_; 
 
-    sub report (%merged) {
-        print Dumper %merged;
+        my @widths;
+        for my $col (0 .. $#{$headers}) {
+            my $max_width = length($headers->[$col]);
+            for my $row (@$rows) {
+                my $len = length($row->[$col]);
+                $max_width = $len if $len > $max_width;
+            }
+            push @widths, $max_width;
+        }
+
+        my $header_line = '|';
+        my $separator_line = '|';
+        for my $col (0 .. $#{$headers}) {
+            $header_line .= sprintf(" %-*s |", $widths[$col], $headers->[$col]);
+            $separator_line .= '-' x ($widths[$col] + 2) . '|';
+        }
+
+        my @table_lines;
+        push @table_lines, $header_line;
+        push @table_lines, $separator_line;
+
+        for my $row (@$rows) {
+            my $row_line = '|';
+            for my $col (0 .. $#{$row}) {
+                $row_line .= sprintf(" %-*s |", $widths[$col], $row->[$col]);
+            }
+            push @table_lines, $row_line;
+        }
+
+        return join("
+", @table_lines);
+    }
+
+    sub report {
+        my ( $stats_dir, %merged ) = @_;
+        for my $date ( sort { $b cmp $a } keys %merged ) {
+            my $stats = $merged{$date};
+            next unless $stats->{count};
+
+            my ( $year, $month, $day ) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+
+            my $report_content = "";
+
+            $report_content .= "## Stats for $year-$month-$day
+
+";
+
+            # Summary
+            $report_content .= "### Summary
+
+";
+            my $total_requests = ($stats->{count}{gemini} // 0) + ($stats->{count}{web} // 0);
+            $report_content .= "* Total requests: $total_requests
+";
+            $report_content .= "* Filtered requests: " . ($stats->{count}{filtered} // 0) . "
+";
+            $report_content .= "* Gemini requests: " . ($stats->{count}{gemini} // 0) . "
+";
+            $report_content .= "* Web requests: " . ($stats->{count}{web} // 0) . "
+";
+            $report_content .= "* IPv4 requests: " . ($stats->{count}{IPv4} // 0) . "
+";
+            $report_content .= "* IPv6 requests: " . ($stats->{count}{IPv6} // 0) . "
+
+";
+
+            # Feed IPs
+            $report_content .= "### Feed Statistics
+
+";
+            my @feed_rows;
+            push @feed_rows, [ 'Total', $stats->{feed_ips}{'Total'} // 0 ];
+            push @feed_rows, [ 'Gemini Gemfeed', $stats->{feed_ips}{'Gemini Gemfeed'} // 0 ];
+            push @feed_rows, [ 'Gemini Atom',    $stats->{feed_ips}{'Gemini Atom'} // 0 ];
+            push @feed_rows, [ 'Web Gemfeed',    $stats->{feed_ips}{'Web Gemfeed'} // 0 ];
+            push @feed_rows, [ 'Web Atom',       $stats->{feed_ips}{'Web Atom'} // 0 ];
+            $report_content .= "```
+";
+            $report_content .= format_table( [ 'Feed Type', 'Count' ], \@feed_rows );
+            $report_content .= "
+```
+
+";
+
+            # Page IPs (Hosts)
+            $report_content .= "### Page Statistics (by Host)
+
+";
+            my @host_rows;
+            my $hosts        = $stats->{page_ips}{hosts};
+            my @sorted_hosts = sort { ( $hosts->{$b} // 0 ) <=> ( $hosts->{$a} // 0 ) } keys %$hosts;
+
+            my $truncated = @sorted_hosts > 50;
+            @sorted_hosts = @sorted_hosts[ 0 .. 49 ] if $truncated;
+
+            for my $host (@sorted_hosts) {
+                push @host_rows, [ $host, $hosts->{$host} // 0 ];
+            }
+            $report_content .= "```
+";
+            $report_content .= format_table( [ 'Host', 'Unique Visitors' ], \@host_rows );
+            $report_content .= "
+```
+";
+            if ($truncated) {
+                $report_content .= "
+... and more (truncated to 50 entries).
+";
+            }
+            $report_content .= "
+";
+
+            # Page IPs (URLs)
+            $report_content .= "### Page Statistics (by URL)
+
+";
+            my @url_rows;
+            my $urls        = $stats->{page_ips}{urls};
+            my @sorted_urls = sort { ( $urls->{$b} // 0 ) <=> ( $urls->{$a} // 0 ) } keys %$urls;
+            $truncated = @sorted_urls > 50;
+            @sorted_urls = @sorted_urls[ 0 .. 49 ] if $truncated;
+
+            for my $url (@sorted_urls) {
+                push @url_rows, [ $url, $urls->{$url} // 0 ];
+            }
+            $report_content .= "```
+";
+            $report_content .= format_table( [ 'URL', 'Unique Visitors' ], \@url_rows );
+            $report_content .= "
+```
+";
+            if ($truncated) {
+                $report_content .= "
+... and more (truncated to 50 entries).
+";
+            }
+            $report_content .= "
+";
+
+            my $report_path = "$stats_dir/$date.gmi";
+            say "Writing report to $report_path";
+            FileHelper::write( $report_path, $report_content );
+        }
     }
 }
+
 
 package main {
     use Getopt::Long;
@@ -755,7 +898,7 @@ package main {
       if $replicate
       or $all;
 
-    Foostats::Reporter::report( Foostats::Merger::merge($stats_dir) )
+    Foostats::Reporter::report( $stats_dir, Foostats::Merger::merge($stats_dir) )
       if $report
       or $all;
 }
