@@ -678,6 +678,8 @@ package Foostats::Merger {
 }
 
 package Foostats::Reporter {
+    use Time::Piece;
+    
     sub format_table {
         my ($headers, $rows) = @_; 
 
@@ -824,6 +826,182 @@ package Foostats::Reporter {
             say "Writing report to $report_path";
             FileHelper::write( $report_path, $report_content );
         }
+        
+        # Generate 30-day summary report
+        generate_30day_report($stats_dir, %merged);
+    }
+
+    sub generate_30day_report {
+        my ( $stats_dir, %merged ) = @_;
+        
+        # Get the last 30 days of dates
+        my @dates = sort { $b cmp $a } keys %merged;
+        @dates = @dates[0..29] if @dates > 30;
+        
+        my $today = localtime;
+        my $report_date = $today->strftime('%Y%m%d');
+        
+        my $report_content = "# 30-Day Summary Report
+";
+        $report_content .= "## Generated on " . $today->strftime('%Y-%m-%d') . "
+
+";
+        
+        # Summary section - day-to-day evolution
+        $report_content .= "## Daily Summary Evolution (Last 30 Days)
+
+";
+        $report_content .= "### Total Requests by Day
+
+```
+";
+        
+        my @summary_rows;
+        for my $date (reverse @dates) {
+            my $stats = $merged{$date};
+            next unless $stats->{count};
+            
+            my ( $year, $month, $day ) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+            my $formatted_date = "$year-$month-$day";
+            
+            my $total_requests = ($stats->{count}{gemini} // 0) + ($stats->{count}{web} // 0);
+            my $filtered = $stats->{count}{filtered} // 0;
+            my $gemini = $stats->{count}{gemini} // 0;
+            my $web = $stats->{count}{web} // 0;
+            my $ipv4 = $stats->{count}{IPv4} // 0;
+            my $ipv6 = $stats->{count}{IPv6} // 0;
+            
+            push @summary_rows, [ $formatted_date, $total_requests, $filtered, $gemini, $web, $ipv4, $ipv6 ];
+        }
+        
+        $report_content .= format_table(
+            [ 'Date', 'Total', 'Filtered', 'Gemini', 'Web', 'IPv4', 'IPv6' ],
+            \@summary_rows
+        );
+        $report_content .= "
+```
+
+";
+        
+        # Feed statistics evolution
+        $report_content .= "### Feed Statistics Evolution
+
+```
+";
+        
+        my @feed_rows;
+        for my $date (reverse @dates) {
+            my $stats = $merged{$date};
+            next unless $stats->{feed_ips};
+            
+            my ( $year, $month, $day ) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+            my $formatted_date = "$year-$month-$day";
+            
+            push @feed_rows, [
+                $formatted_date,
+                $stats->{feed_ips}{'Total'} // 0,
+                $stats->{feed_ips}{'Gemini Gemfeed'} // 0,
+                $stats->{feed_ips}{'Gemini Atom'} // 0,
+                $stats->{feed_ips}{'Web Gemfeed'} // 0,
+                $stats->{feed_ips}{'Web Atom'} // 0
+            ];
+        }
+        
+        $report_content .= format_table(
+            [ 'Date', 'Total', 'Gem Feed', 'Gem Atom', 'Web Feed', 'Web Atom' ],
+            \@feed_rows
+        );
+        $report_content .= "
+```
+
+";
+        
+        # Aggregate hosts and URLs for 30-day period
+        my %all_hosts;
+        my %all_urls;
+        
+        for my $date (@dates) {
+            my $stats = $merged{$date};
+            next unless $stats->{page_ips};
+            
+            # Aggregate hosts
+            while (my ($host, $count) = each %{$stats->{page_ips}{hosts}}) {
+                $all_hosts{$host} //= 0;
+                $all_hosts{$host} += $count;
+            }
+            
+            # Aggregate URLs
+            while (my ($url, $count) = each %{$stats->{page_ips}{urls}}) {
+                $all_urls{$url} //= 0;
+                $all_urls{$url} += $count;
+            }
+        }
+        
+        # Top 50 hosts
+        $report_content .= "## Top 50 Hosts (30-Day Total)
+
+```
+";
+        
+        my @host_rows;
+        my @sorted_hosts = sort { $all_hosts{$b} <=> $all_hosts{$a} } keys %all_hosts;
+        @sorted_hosts = @sorted_hosts[0..49] if @sorted_hosts > 50;
+        
+        for my $host (@sorted_hosts) {
+            push @host_rows, [ $host, $all_hosts{$host} ];
+        }
+        
+        $report_content .= format_table(
+            [ 'Host', 'Total Unique Visitors' ],
+            \@host_rows
+        );
+        $report_content .= "
+```
+
+";
+        
+        # Top 50 URLs
+        $report_content .= "## Top 50 URLs (30-Day Total)
+
+```
+";
+        
+        my @url_rows;
+        my @sorted_urls = sort { $all_urls{$b} <=> $all_urls{$a} } keys %all_urls;
+        @sorted_urls = @sorted_urls[0..49] if @sorted_urls > 50;
+        
+        for my $url (@sorted_urls) {
+            push @url_rows, [ $url, $all_urls{$url} ];
+        }
+        
+        $report_content .= format_table(
+            [ 'URL', 'Total Unique Visitors' ],
+            \@url_rows
+        );
+        $report_content .= "
+```
+
+";
+        
+        # Links to daily reports
+        $report_content .= "## Daily Reports
+
+";
+        
+        for my $date (@dates) {
+            next unless exists $merged{$date} && $merged{$date}->{count};
+            
+            my ( $year, $month, $day ) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+            my $formatted_date = "$year-$month-$day";
+            
+            $report_content .= "=> ./$date.gmi $formatted_date Daily Report
+";
+        }
+        
+        # Write the 30-day report
+        my $report_path = "$stats_dir/30day_summary_$report_date.gmi";
+        say "Writing 30-day summary report to $report_path";
+        FileHelper::write( $report_path, $report_content );
     }
 }
 
