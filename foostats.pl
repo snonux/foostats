@@ -726,6 +726,30 @@ package Foostats::Reporter {
 
             my ( $year, $month, $day ) = $date =~ /(\d{4})(\d{2})(\d{2})/;
 
+            # Check if .gmi file exists and its age based on date in filename
+            my $gemtext_dir = "$stats_dir/gemtext";
+            my $report_path = "$gemtext_dir/$date.gmi";
+            
+            # Calculate age of the data based on date in filename
+            my $today = Time::Piece->new();
+            my $file_date = Time::Piece->strptime($date, '%Y%m%d');
+            my $age_days = ($today - $file_date) / (24 * 60 * 60);
+            
+            if (-e $report_path) {
+                # File exists
+                if ($age_days <= 3) {
+                    # Data is recent (within 3 days), regenerate it
+                    say "Regenerating daily report for $year-$month-$day (data age: " . sprintf("%.1f", $age_days) . " days)";
+                } else {
+                    # Data is old (older than 3 days), skip if file exists
+                    say "Skipping daily report for $year-$month-$day (file exists, data age: " . sprintf("%.1f", $age_days) . " days)";
+                    next;
+                }
+            } else {
+                # File doesn't exist, generate it
+                say "Generating new daily report for $year-$month-$day (file doesn't exist, data age: " . sprintf("%.1f", $age_days) . " days)";
+            }
+
             my $report_content = "";
 
             $report_content .= "## Stats for $year-$month-$day
@@ -841,10 +865,9 @@ package Foostats::Reporter {
             $report_content .= "=> ./30day_summary_$current_month.gmi 30-Day Summary Report\n\n";
 
             # Ensure gemtext directory exists
-            my $gemtext_dir = "$stats_dir/gemtext";
             mkdir $gemtext_dir unless -d $gemtext_dir;
 
-            my $report_path = "$gemtext_dir/$date.gmi";
+            # $report_path already defined above
             say "Writing report to $report_path";
             FileHelper::write( $report_path, $report_content );
         }
