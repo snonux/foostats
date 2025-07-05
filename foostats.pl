@@ -681,6 +681,48 @@ package Foostats::Merger {
 package Foostats::Reporter {
     use Time::Piece;
 
+    sub truncate_url {
+        my ($url, $max_length) = @_;
+        $max_length //= 100;  # Default to 100 characters
+        
+        return $url if length($url) <= $max_length;
+        
+        # Calculate how many characters we need to remove
+        my $ellipsis = '...';
+        my $ellipsis_length = length($ellipsis);
+        my $available_length = $max_length - $ellipsis_length;
+        
+        # Split available length between start and end, favoring the end
+        my $keep_start = int($available_length * 0.4);  # 40% for start
+        my $keep_end = $available_length - $keep_start;  # 60% for end
+        
+        my $start = substr($url, 0, $keep_start);
+        my $end = substr($url, -$keep_end);
+        
+        return $start . $ellipsis . $end;
+    }
+
+    sub truncate_urls_for_table {
+        my ($url_rows, $count_column_header) = @_;
+        
+        # Calculate the maximum width needed for the count column
+        my $max_count_width = length($count_column_header);
+        for my $row (@$url_rows) {
+            my $count_width = length($row->[1]);
+            $max_count_width = $count_width if $count_width > $max_count_width;
+        }
+        
+        # Row format: "| URL... | count |" with padding
+        # Calculate: "| " (2) + URL + " | " (3) + count_with_padding + " |" (2)
+        my $max_url_length = 100 - 7 - $max_count_width;
+        $max_url_length = 70 if $max_url_length > 70;  # Cap at reasonable length
+        
+        # Truncate URLs in place
+        for my $row (@$url_rows) {
+            $row->[0] = truncate_url($row->[0], $max_url_length);
+        }
+    }
+
     sub format_table {
         my ( $headers, $rows ) = @_;
 
@@ -703,6 +745,7 @@ package Foostats::Reporter {
         }
 
         my @table_lines;
+        push @table_lines, $separator_line;  # Add top terminator
         push @table_lines, $header_line;
         push @table_lines, $separator_line;
 
@@ -713,6 +756,8 @@ package Foostats::Reporter {
             }
             push @table_lines, $row_line;
         }
+        
+        push @table_lines, $separator_line;  # Add bottom terminator
 
         return join( "
 ", @table_lines );
@@ -844,6 +889,9 @@ package Foostats::Reporter {
             for my $url (@sorted_urls) {
                 push @url_rows, [ $url, $urls->{$url} // 0 ];
             }
+            
+            # Truncate URLs to fit within 100-character rows
+            truncate_urls_for_table(\@url_rows, 'Unique Visitors');
             $report_content .= "```
 ";
             $report_content .= format_table( [ 'URL', 'Unique Visitors' ], \@url_rows );
@@ -911,8 +959,8 @@ package Foostats::Reporter {
     sub build_report_header {
         my ($today) = @_;
 
-        my $content = "# 30-Day Summary Report\n";
-        $content .= "## Generated on " . $today->strftime('%Y-%m-%d') . "\n\n";
+        my $content = "# 30-Day Summary Report\n\n";
+        $content .= "Generated on " . $today->strftime('%Y-%m-%d') . "\n\n";
         return $content;
     }
 
@@ -1028,7 +1076,7 @@ package Foostats::Reporter {
             push @host_rows, [ $host, $all_hosts->{$host} ];
         }
 
-        $content .= format_table( [ 'Host', 'Total Unique Visitors' ], \@host_rows );
+        $content .= format_table( [ 'Host', 'Visitors' ], \@host_rows );
         $content .= "\n```\n\n";
 
         return $content;
@@ -1047,8 +1095,11 @@ package Foostats::Reporter {
         for my $url (@sorted_urls) {
             push @url_rows, [ $url, $all_urls->{$url} ];
         }
+        
+        # Truncate URLs to fit within 100-character rows
+        truncate_urls_for_table(\@url_rows, 'Visitors');
 
-        $content .= format_table( [ 'URL', 'Total Unique Visitors' ], \@url_rows );
+        $content .= format_table( [ 'URL', 'Visitors' ], \@url_rows );
         $content .= "\n```\n\n";
 
         return $content;
