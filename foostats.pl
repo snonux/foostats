@@ -771,8 +771,198 @@ package Foostats::Reporter {
 ", @table_lines );
     }
 
+    # Convert gemtext to HTML
+    sub gemtext_to_html {
+        my ($content) = @_;
+        my $html = "";
+        my $in_code_block = 0;
+        my @lines = split /\n/, $content;
+        my @code_block_lines = ();
+        
+        for my $line (@lines) {
+            if ($line =~ /^```/) {
+                if ($in_code_block) {
+                    # End code block - check if it's a table
+                    if (is_ascii_table(\@code_block_lines)) {
+                        $html .= convert_ascii_table_to_html(\@code_block_lines);
+                    } else {
+                        $html .= "<pre>\n";
+                        for my $code_line (@code_block_lines) {
+                            $html .= encode_entities($code_line) . "\n";
+                        }
+                        $html .= "</pre>\n";
+                    }
+                    @code_block_lines = ();
+                    $in_code_block = 0;
+                } else {
+                    $in_code_block = 1;
+                }
+                next;
+            }
+            
+            if ($in_code_block) {
+                push @code_block_lines, $line;
+                next;
+            }
+            
+            # Headers
+            if ($line =~ /^### (.*)/) {
+                $html .= "<h3>" . encode_entities($1) . "</h3>\n";
+            } elsif ($line =~ /^## (.*)/) {
+                $html .= "<h2>" . encode_entities($1) . "</h2>\n";
+            } elsif ($line =~ /^# (.*)/) {
+                $html .= "<h1>" . encode_entities($1) . "</h1>\n";
+            }
+            # Links
+            elsif ($line =~ /^=> (\S+)\s+(.*)/) {
+                my ($url, $text) = ($1, $2);
+                # Convert .gmi links to .html
+                $url =~ s/\.gmi$/\.html/;
+                $html .= "<p><a href=\"" . encode_entities($url) . "\">" . encode_entities($text) . "</a></p>\n";
+            }
+            # Bullet points
+            elsif ($line =~ /^\* (.*)/) {
+                $html .= "<li>" . encode_entities($1) . "</li>\n";
+            }
+            # Empty line
+            elsif ($line =~ /^\s*$/) {
+                $html .= "<br>\n";
+            }
+            # Regular text
+            else {
+                $html .= "<p>" . encode_entities($line) . "</p>\n";
+            }
+        }
+        
+        return $html;
+    }
+    
+    # Check if the lines form an ASCII table
+    sub is_ascii_table {
+        my ($lines) = @_;
+        return 0 if @$lines < 3;  # Need at least header, separator, and one data row
+        
+        # Check for separator lines with dashes and pipes
+        for my $line (@$lines) {
+            return 1 if $line =~ /^\|?[\s\-]+\|/;
+        }
+        return 0;
+    }
+    
+    # Convert ASCII table to HTML table
+    sub convert_ascii_table_to_html {
+        my ($lines) = @_;
+        my $html = "<table>\n";
+        my $row_count = 0;
+        
+        for my $line (@$lines) {
+            # Skip separator lines
+            next if $line =~ /^\|?[\s\-]+\|/ && $line =~ /\-/;
+            
+            # Parse table row
+            my @cells = split /\s*\|\s*/, $line;
+            @cells = grep { length($_) > 0 } @cells;  # Remove empty cells
+            
+            if (@cells) {
+                $html .= "<tr>\n";
+                # First row is header
+                my $tag = ($row_count == 0) ? "th" : "td";
+                for my $cell (@cells) {
+                    $html .= "  <$tag>" . encode_entities(trim($cell)) . "</$tag>\n";
+                }
+                $html .= "</tr>\n";
+                $row_count++;
+            }
+        }
+        
+        $html .= "</table>\n";
+        return $html;
+    }
+    
+    # Trim whitespace from string
+    sub trim {
+        my ($str) = @_;
+        $str =~ s/^\s+//;
+        $str =~ s/\s+$//;
+        return $str;
+    }
+    
+    # Encode HTML entities to prevent XSS
+    sub encode_entities {
+        my ($text) = @_;
+        $text =~ s/&/&amp;/g;
+        $text =~ s/</&lt;/g;
+        $text =~ s/>/&gt;/g;
+        $text =~ s/"/&quot;/g;
+        $text =~ s/'/&#39;/g;
+        return $text;
+    }
+    
+    # Generate HTML wrapper
+    sub generate_html_page {
+        my ($title, $content) = @_;
+        return qq{<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$title</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        h1, h2, h3 {
+            color: #333;
+        }
+        pre {
+            background-color: #e8e8e8;
+            padding: 10px;
+            overflow-x: auto;
+            border-radius: 4px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        a {
+            color: #0066cc;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        li {
+            margin-left: 20px;
+        }
+    </style>
+</head>
+<body>
+$content
+</body>
+</html>
+};
+    }
+
     sub report {
-        my ( $stats_dir, $output_dir, %merged ) = @_;
+        my ( $stats_dir, $output_dir, $html_output_dir, %merged ) = @_;
         for my $date ( sort { $b cmp $a } keys %merged ) {
             my $stats = $merged{$date};
             next unless $stats->{count};
@@ -781,15 +971,16 @@ package Foostats::Reporter {
 
             # Check if .gmi file exists and its age based on date in filename
             my $report_path = "$output_dir/$date.gmi";
+            my $html_report_path = "$output_dir/$date.html";
 
             # Calculate age of the data based on date in filename
             my $today     = Time::Piece->new();
             my $file_date = Time::Piece->strptime( $date, '%Y%m%d' );
             my $age_days  = ( $today - $file_date ) / ( 24 * 60 * 60 );
 
-            if ( -e $report_path ) {
+            if ( -e $report_path && -e $html_report_path ) {
 
-                # File exists
+                # Files exist
                 if ( $age_days <= 3 ) {
 
                     # Data is recent (within 3 days), regenerate it
@@ -799,9 +990,9 @@ package Foostats::Reporter {
                       . " days)";
                 }
                 else {
-                    # Data is old (older than 3 days), skip if file exists
+                    # Data is old (older than 3 days), skip if files exist
                     say
-"Skipping daily report for $year-$month-$day (file exists, data age: "
+"Skipping daily report for $year-$month-$day (files exist, data age: "
                       . sprintf( "%.1f", $age_days )
                       . " days)";
                     next;
@@ -933,12 +1124,14 @@ package Foostats::Reporter {
             $report_content .= "
 ";
 
-            # Add link to monthly report
+            # Add links to summary reports
             $report_content .= "## Related Reports\n\n";
             my $now           = localtime;
-            my $current_month = $now->strftime('%Y%m%d');
-            $report_content .=
-              "=> ./30day_summary_$current_month.gmi 30-Day Summary Report\n\n";
+            my $current_date = $now->strftime('%Y%m%d');
+            $report_content .= "=> ./7day_summary_$current_date.gmi 7-Day Summary Report\n";
+            $report_content .= "=> ./30day_summary_$current_date.gmi 30-Day Summary Report\n";
+            $report_content .= "=> ./365day_summary_$current_date.gmi 365-Day Summary Report\n";
+            $report_content .= "=> ./index.gmi Back to Index\n\n";
 
             # Ensure output directory exists
             mkdir $output_dir unless -d $output_dir;
@@ -946,27 +1139,38 @@ package Foostats::Reporter {
             # $report_path already defined above
             say "Writing report to $report_path";
             FileHelper::write( $report_path, $report_content );
+            
+            # Also write HTML version
+            mkdir $html_output_dir unless -d $html_output_dir;
+            my $html_path = "$html_output_dir/$date.html";
+            my $html_content = gemtext_to_html($report_content);
+            my $html_page = generate_html_page("Stats for $year-$month-$day", $html_content);
+            say "Writing HTML report to $html_path";
+            FileHelper::write( $html_path, $html_page );
         }
 
-        # Generate 30-day summary report
-        generate_30day_report( $stats_dir, $output_dir, %merged );
+        # Generate summary reports
+        generate_summary_report( 7, $stats_dir, $output_dir, $html_output_dir, %merged );
+        generate_summary_report( 30, $stats_dir, $output_dir, $html_output_dir, %merged );
+        generate_summary_report( 365, $stats_dir, $output_dir, $html_output_dir, %merged );
         
-        # Generate index.gmi
-        generate_index( $output_dir );
+        # Generate index.gmi and index.html
+        generate_index( $output_dir, $html_output_dir );
     }
 
-    sub generate_30day_report {
-        my ( $stats_dir, $output_dir, %merged ) = @_;
+    sub generate_summary_report {
+        my ( $days, $stats_dir, $output_dir, $html_output_dir, %merged ) = @_;
 
-        # Get the last 30 days of dates
+        # Get the last N days of dates
         my @dates = sort { $b cmp $a } keys %merged;
-        @dates = @dates[ 0 .. 29 ] if @dates > 30;
+        my $max_index = $days - 1;
+        @dates = @dates[ 0 .. $max_index ] if @dates > $days;
 
         my $today       = localtime;
         my $report_date = $today->strftime('%Y%m%d');
 
         # Build report content
-        my $report_content = build_report_header($today);
+        my $report_content = build_report_header($today, $days);
         $report_content .= build_daily_summary_section( \@dates, \%merged );
         $report_content .= build_feed_statistics_section( \@dates, \%merged );
 
@@ -976,21 +1180,30 @@ package Foostats::Reporter {
         $report_content .= build_top_hosts_section($all_hosts);
         $report_content .= build_top_urls_section($all_urls);
 
-        # Add daily report links
-        $report_content .= build_daily_reports_links( \@dates, \%merged );
+        # Add links to other summary reports
+        $report_content .= build_summary_links($days, $report_date);
 
-        # Ensure output directory exists and write the 30-day report
+        # Ensure output directory exists and write the summary report
         mkdir $output_dir unless -d $output_dir;
 
-        my $report_path = "$output_dir/30day_summary_$report_date.gmi";
-        say "Writing 30-day summary report to $report_path";
+        my $report_path = "$output_dir/${days}day_summary_$report_date.gmi";
+        say "Writing $days-day summary report to $report_path";
         FileHelper::write( $report_path, $report_content );
+        
+        # Also write HTML version
+        mkdir $html_output_dir unless -d $html_output_dir;
+        my $html_path = "$html_output_dir/${days}day_summary_$report_date.html";
+        my $html_content = gemtext_to_html($report_content);
+        my $html_page = generate_html_page("$days-Day Summary Report", $html_content);
+        say "Writing HTML $days-day summary report to $html_path";
+        FileHelper::write( $html_path, $html_page );
     }
 
     sub build_report_header {
-        my ($today) = @_;
+        my ($today, $days) = @_;
+        $days //= 30;  # Default to 30 days for backward compatibility
 
-        my $content = "# 30-Day Summary Report\n\n";
+        my $content = "# $days-Day Summary Report\n\n";
         $content .= "Generated on " . $today->strftime('%Y-%m-%d') . "\n\n";
         return $content;
     }
@@ -1146,46 +1359,77 @@ package Foostats::Reporter {
         return $content;
     }
 
-    sub build_daily_reports_links {
-        my ( $dates, $merged ) = @_;
+    sub build_summary_links {
+        my ( $current_days, $report_date ) = @_;
 
-        my $content = "## Daily Reports\n\n";
-
-        for my $date (@$dates) {
-            next unless exists $merged->{$date} && $merged->{$date}->{count};
-
-            my ( $year, $month, $day ) = $date =~ /(\d{4})(\d{2})(\d{2})/;
-            my $formatted_date = "$year-$month-$day";
-
-            $content .= "=> ./$date.gmi $formatted_date Daily Report\n";
+        my $content = "## Other Summary Reports\n\n";
+        
+        # Add links to other summary periods
+        my @periods = (7, 30, 365);
+        
+        for my $days (@periods) {
+            next if $days == $current_days;  # Skip current report type
+            $content .= "=> ./${days}day_summary_$report_date.gmi ${days}-Day Summary Report\n";
         }
+        
+        # Add link to index
+        $content .= "\n=> ./index.gmi Back to Index\n";
 
         return $content;
     }
     
     sub generate_index {
-        my ($output_dir) = @_;
+        my ($output_dir, $html_output_dir) = @_;
         
         # Get all .gmi files in the output directory
         opendir(my $dh, $output_dir) or die "Cannot open directory $output_dir: $!";
         my @gmi_files = grep { /\.gmi$/ && $_ ne 'index.gmi' } readdir($dh);
         closedir($dh);
         
-        # Sort files: 30-day summaries first, then daily reports by date (newest first)
-        my @summaries = sort { $b cmp $a } grep { /^30day_summary_/ } @gmi_files;
+        # Sort files by type and date (newest first)
+        my @summaries_7day = sort { $b cmp $a } grep { /^7day_summary_/ } @gmi_files;
+        my @summaries_30day = sort { $b cmp $a } grep { /^30day_summary_/ } @gmi_files;
+        my @summaries_365day = sort { $b cmp $a } grep { /^365day_summary_/ } @gmi_files;
         my @daily = sort { $b cmp $a } grep { /^\d{8}\.gmi$/ } @gmi_files;
         
         # Build index content
         my $content = "# Foostats Reports Index\n\n";
         $content .= "Generated on " . localtime->strftime('%Y-%m-%d %H:%M:%S') . "\n\n";
         
-        if (@summaries) {
+        # Add 7-day summaries
+        if (@summaries_7day) {
+            $content .= "## 7-Day Summary Reports\n\n";
+            for my $summary (@summaries_7day) {
+                my ($date) = $summary =~ /7day_summary_(\d{8})\.gmi/;
+                if ($date) {
+                    my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+                    $content .= "=> ./$summary 7-Day Summary ($year-$month-$day)\n";
+                }
+            }
+            $content .= "\n";
+        }
+        
+        # Add 30-day summaries
+        if (@summaries_30day) {
             $content .= "## 30-Day Summary Reports\n\n";
-            for my $summary (@summaries) {
+            for my $summary (@summaries_30day) {
                 my ($date) = $summary =~ /30day_summary_(\d{8})\.gmi/;
                 if ($date) {
                     my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
                     $content .= "=> ./$summary 30-Day Summary ($year-$month-$day)\n";
+                }
+            }
+            $content .= "\n";
+        }
+        
+        # Add 365-day summaries
+        if (@summaries_365day) {
+            $content .= "## 365-Day Summary Reports\n\n";
+            for my $summary (@summaries_365day) {
+                my ($date) = $summary =~ /365day_summary_(\d{8})\.gmi/;
+                if ($date) {
+                    my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+                    $content .= "=> ./$summary 365-Day Summary ($year-$month-$day)\n";
                 }
             }
             $content .= "\n";
@@ -1212,6 +1456,14 @@ package Foostats::Reporter {
         my $index_path = "$output_dir/index.gmi";
         say "Writing index to $index_path";
         FileHelper::write($index_path, $content);
+        
+        # Also write HTML version
+        mkdir $html_output_dir unless -d $html_output_dir;
+        my $html_path = "$html_output_dir/index.html";
+        my $html_content = gemtext_to_html($content);
+        my $html_page = generate_html_page("Foostats Reports Index", $html_content);
+        say "Writing HTML index to $html_path";
+        FileHelper::write($html_path, $html_page);
     }
 }
 
@@ -1232,6 +1484,8 @@ package main {
                                     Default: /var/www/htdocs/buetow.org/self/foostats
           --output-dir <path>       Directory to write .gmi report files.
                                     Default: /var/gemini/stats.foo.zone
+          --html-output-dir <path>  Directory to write .html report files.
+                                    Default: /var/www/htdocs/gemtexter/stats.foo.zone
           --odds-file <path>        File with odd URI patterns to filter.
                                     Default: <stats-dir>/fooodds.txt
           --filter-log <path>       Log file for filtered requests.
@@ -1262,6 +1516,7 @@ package main {
     my $odds_file = $stats_dir . '/fooodds.txt';
     my $odds_log  = '/var/log/fooodds';
     my $output_dir;  # Will default to $stats_dir/gemtext if not specified
+    my $html_output_dir;  # Will default to /var/www/htdocs/gemtexter/stats.foo.zone if not specified
     my $partner_node =
       hostname eq 'fishfinger.buetow.org'
       ? 'blowfish.buetow.org'
@@ -1276,6 +1531,7 @@ package main {
       'all!'           => \$all,
       'stats-dir=s'    => \$stats_dir,
       'output-dir=s'   => \$output_dir,
+      'html-output-dir=s' => \$html_output_dir,
       'partner-node=s' => \$partner_node,
       'help|?'         => \$help;
 
@@ -1289,10 +1545,11 @@ package main {
       if $replicate
       or $all;
 
-    # Set default output directory if not specified
+    # Set default output directories if not specified
     $output_dir //= '/var/gemini/stats.foo.zone';
+    $html_output_dir //= '/var/www/htdocs/gemtexter/stats.foo.zone';
     
-    Foostats::Reporter::report( $stats_dir, $output_dir,
+    Foostats::Reporter::report( $stats_dir, $output_dir, $html_output_dir,
         Foostats::Merger::merge($stats_dir) )
       if $report
       or $all;
