@@ -776,6 +776,7 @@ package Foostats::Reporter {
         my ($content) = @_;
         my $html = "";
         my $in_code_block = 0;
+        my $in_list = 0;
         my @lines = split /\n/, $content;
         my @code_block_lines = ();
         
@@ -805,6 +806,12 @@ package Foostats::Reporter {
                 next;
             }
             
+            # Check if we need to close a list
+            if ($in_list && $line !~ /^\* /) {
+                $html .= "</ul>\n";
+                $in_list = 0;
+            }
+            
             # Headers
             if ($line =~ /^### (.*)/) {
                 $html .= "<h3>" . encode_entities($1) . "</h3>\n";
@@ -822,16 +829,25 @@ package Foostats::Reporter {
             }
             # Bullet points
             elsif ($line =~ /^\* (.*)/) {
+                if (!$in_list) {
+                    $html .= "<ul>\n";
+                    $in_list = 1;
+                }
                 $html .= "<li>" . encode_entities($1) . "</li>\n";
             }
-            # Empty line
+            # Empty line - skip to avoid excessive spacing
             elsif ($line =~ /^\s*$/) {
-                $html .= "<br>\n";
+                # Skip empty lines for more compact output
             }
             # Regular text
             else {
                 $html .= "<p>" . encode_entities($line) . "</p>\n";
             }
+        }
+        
+        # Close list if still open
+        if ($in_list) {
+            $html .= "</ul>\n";
         }
         
         return $html;
@@ -910,33 +926,53 @@ package Foostats::Reporter {
     <style>
         body {
             font-family: Arial, sans-serif;
-            line-height: 1.6;
+            font-size: 14px;
+            line-height: 1.3;
             max-width: 1200px;
             margin: 0 auto;
-            padding: 20px;
-            background-color: #f4f4f4;
+            padding: 10px;
+            background-color: #fff;
         }
-        h1, h2, h3 {
+        h1 {
+            font-size: 20px;
+            margin: 10px 0;
             color: #333;
         }
+        h2 {
+            font-size: 18px;
+            margin: 8px 0;
+            color: #333;
+        }
+        h3 {
+            font-size: 16px;
+            margin: 6px 0;
+            color: #333;
+        }
+        p {
+            margin: 4px 0;
+        }
         pre {
-            background-color: #e8e8e8;
-            padding: 10px;
+            background-color: #f5f5f5;
+            padding: 5px;
             overflow-x: auto;
-            border-radius: 4px;
+            border: 1px solid #ddd;
+            font-size: 12px;
+            line-height: 1.2;
+            margin: 5px 0;
         }
         table {
             border-collapse: collapse;
-            width: 100%;
-            margin: 20px 0;
+            width: auto;
+            margin: 8px 0;
+            font-size: 13px;
         }
         th, td {
-            border: 1px solid #ddd;
-            padding: 8px;
+            border: 1px solid #ccc;
+            padding: 4px 8px;
             text-align: left;
         }
         th {
-            background-color: #f2f2f2;
+            background-color: #e8e8e8;
             font-weight: bold;
         }
         tr:nth-child(even) {
@@ -950,7 +986,12 @@ package Foostats::Reporter {
             text-decoration: underline;
         }
         li {
-            margin-left: 20px;
+            margin-left: 15px;
+            margin-top: 2px;
+            margin-bottom: 2px;
+        }
+        br {
+            line-height: 0.5;
         }
     </style>
 </head>
