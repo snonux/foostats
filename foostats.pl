@@ -15,6 +15,8 @@ no warnings qw(experimental::refaliasing);
 # TODO: UNDO
 use diagnostics;
 
+use constant VERSION => 'v0.1.0';
+
 # TODO: Blog post about this script and the new Perl features used.
 # TODO NEXT:
 # * Write out a nice output from each merged file, also merge if multiple hosts results
@@ -925,73 +927,53 @@ package Foostats::Reporter {
     <title>$title</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
-            font-size: 14px;
-            line-height: 1.3;
-            max-width: 1200px;
+            font-family: monospace;
+            line-height: 1.6;
+            max-width: 80ch;
             margin: 0 auto;
-            padding: 10px;
-            background-color: #fff;
+            padding: 1em;
+            background: white;
+            color: black;
         }
-        h1 {
-            font-size: 20px;
-            margin: 10px 0;
-            color: #333;
+        h1, h2, h3 {
+            font-weight: bold;
+            margin-top: 1em;
+            margin-bottom: 0.5em;
         }
-        h2 {
-            font-size: 18px;
-            margin: 8px 0;
-            color: #333;
-        }
-        h3 {
-            font-size: 16px;
-            margin: 6px 0;
-            color: #333;
-        }
-        p {
-            margin: 4px 0;
-        }
+        h1 { font-size: 1.2em; }
+        h2 { font-size: 1.1em; }
+        h3 { font-size: 1em; }
         pre {
-            background-color: #f5f5f5;
-            padding: 5px;
             overflow-x: auto;
-            border: 1px solid #ddd;
-            font-size: 12px;
-            line-height: 1.2;
-            margin: 5px 0;
+            white-space: pre;
+            font-family: monospace;
         }
         table {
             border-collapse: collapse;
-            width: auto;
-            margin: 8px 0;
-            font-size: 13px;
+            margin: 1em 0;
         }
         th, td {
-            border: 1px solid #ccc;
-            padding: 4px 8px;
+            padding: 0.25em 0.5em;
             text-align: left;
         }
-        th {
-            background-color: #e8e8e8;
-            font-weight: bold;
-        }
-        tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
         a {
-            color: #0066cc;
-            text-decoration: none;
-        }
-        a:hover {
+            color: blue;
             text-decoration: underline;
         }
-        li {
-            margin-left: 15px;
-            margin-top: 2px;
-            margin-bottom: 2px;
+        a:visited {
+            color: purple;
         }
-        br {
-            line-height: 0.5;
+        hr {
+            border: none;
+            border-top: 1px solid #ccc;
+            margin: 1em 0;
+        }
+        ul {
+            margin: 0.5em 0;
+            padding-left: 2em;
+        }
+        li {
+            margin: 0.25em 0;
         }
     </style>
 </head>
@@ -1533,6 +1515,7 @@ package main {
                                     Default: /var/log/fooodds
           --partner-node <hostname> Hostname of the partner node for replication.
                                     Default: fishfinger.buetow.org or blowfish.buetow.org
+          --version                 Show version information.
           --help                    Show this help message.
         USAGE
         exit 0;
@@ -1550,7 +1533,7 @@ package main {
         $out->write;
     }
 
-    my ( $parse_logs, $replicate, $report, $all, $help );
+    my ( $parse_logs, $replicate, $report, $all, $help, $version );
 
     # With default values
     my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
@@ -1574,7 +1557,13 @@ package main {
       'output-dir=s'   => \$output_dir,
       'html-output-dir=s' => \$html_output_dir,
       'partner-node=s' => \$partner_node,
+      'version'        => \$version,
       'help|?'         => \$help;
+
+    if ($version) {
+        print "foostats " . VERSION . "\n";
+        exit 0;
+    }
 
     usage() if $help;
 
