@@ -926,55 +926,55 @@ package Foostats::Reporter {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>$title</title>
     <style>
+        /* Compact, full-width layout */
+        :root {
+            --pad: 8px;
+        }
+        html, body {
+            height: 100%;
+        }
         body {
-            font-family: monospace;
-            line-height: 1.6;
-            max-width: 80ch;
-            margin: 0 auto;
-            padding: 1em;
-            background: white;
-            color: black;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            line-height: 1.3;
+            margin: 0;
+            padding: var(--pad);
+            background: #fff;
+            color: #000;
         }
-        h1, h2, h3 {
-            font-weight: bold;
-            margin-top: 1em;
-            margin-bottom: 0.5em;
-        }
-        h1 { font-size: 1.2em; }
-        h2 { font-size: 1.1em; }
-        h3 { font-size: 1em; }
+        /* Headings: smaller and tighter */
+        h1, h2, h3 { margin: 0.5em 0 0.25em; font-weight: 600; }
+        h1 { font-size: 1em; }
+        h2 { font-size: 0.95em; }
+        h3 { font-size: 0.9em; }
+        /* Paragraphs and lists: minimal vertical rhythm */
+        p { margin: 0.2em 0; }
+        ul { margin: 0.3em 0; padding-left: 1.2em; }
+        li { margin: 0.1em 0; }
+        /* Code blocks and tables */
         pre {
             overflow-x: auto;
             white-space: pre;
-            font-family: monospace;
+            margin: 0.3em 0;
         }
         table {
             border-collapse: collapse;
-            margin: 1em 0;
+            table-layout: auto; /* size columns by content */
+            width: auto;        /* do not stretch to full width */
+            max-width: 100%;
+            margin: 0.5em 0;
+            font-size: 0.95em;
+            display: inline-table; /* keep as compact as content allows */
         }
         th, td {
-            padding: 0.25em 0.5em;
+            padding: 0.1em 0.3em;
             text-align: left;
+            white-space: nowrap; /* avoid wide columns caused by wrapping */
         }
-        a {
-            color: blue;
-            text-decoration: underline;
-        }
-        a:visited {
-            color: purple;
-        }
-        hr {
-            border: none;
-            border-top: 1px solid #ccc;
-            margin: 1em 0;
-        }
-        ul {
-            margin: 0.5em 0;
-            padding-left: 2em;
-        }
-        li {
-            margin: 0.25em 0;
-        }
+        /* Links */
+        a { color: #06c; text-decoration: underline; }
+        a:visited { color: #639; }
+        /* Rules */
+        hr { border: none; border-top: 1px solid #ccc; margin: 0.5em 0; }
     </style>
 </head>
 <body>
