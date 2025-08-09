@@ -808,6 +808,11 @@ package Foostats::Reporter {
                 next;
             }
             
+            # Skip 365-day summary section header in HTML output
+            if ($line =~ /^## 365-Day Summary Reports\s*$/) {
+                next;
+            }
+
             # Check if we need to close a list
             if ($in_list && $line !~ /^\* /) {
                 $html .= "</ul>\n";
@@ -825,6 +830,10 @@ package Foostats::Reporter {
             # Links
             elsif ($line =~ /^=> (\S+)\s+(.*)/) {
                 my ($url, $text) = ($1, $2);
+                # Drop 365-day summary links from HTML output
+                if ($url =~ /(?:^|[\/.])365day_summary_\d{8}\.gmi$/) {
+                    next;
+                }
                 # Convert .gmi links to .html
                 $url =~ s/\.gmi$/\.html/;
                 $html .= "<p><a href=\"" . encode_entities($url) . "\">" . encode_entities($text) . "</a></p>\n";
@@ -1213,13 +1222,17 @@ $content
         say "Writing $days-day summary report to $report_path";
         FileHelper::write( $report_path, $report_content );
         
-        # Also write HTML version
-        mkdir $html_output_dir unless -d $html_output_dir;
-        my $html_path = "$html_output_dir/${days}day_summary_$report_date.html";
-        my $html_content = gemtext_to_html($report_content);
-        my $html_page = generate_html_page("$days-Day Summary Report", $html_content);
-        say "Writing HTML $days-day summary report to $html_path";
-        FileHelper::write( $html_path, $html_page );
+        # Also write HTML version, except for 365-day summaries (HTML suppressed)
+        if ($days != 365) {
+            mkdir $html_output_dir unless -d $html_output_dir;
+            my $html_path = "$html_output_dir/${days}day_summary_$report_date.html";
+            my $html_content = gemtext_to_html($report_content);
+            my $html_page = generate_html_page("$days-Day Summary Report", $html_content);
+            say "Writing HTML $days-day summary report to $html_path";
+            FileHelper::write( $html_path, $html_page );
+        } else {
+            say "Skipping HTML generation for 365-day summary (Gemtext only)";
+        }
     }
 
     sub build_report_header {
