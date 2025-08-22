@@ -769,8 +769,7 @@ package Foostats::Reporter {
 
         push @table_lines, $separator_line;    # Add bottom terminator
 
-        return join( "
-", @table_lines );
+        return join( "\n", @table_lines );
     }
 
     # Convert gemtext to HTML
@@ -1040,39 +1039,26 @@ $content
 
             my $report_content = "";
 
-            $report_content .= "## Stats for $year-$month-$day
-
-";
+            $report_content .= "## Stats for $year-$month-$day\n\n";
 
             # Summary
-            $report_content .= "### Summary
-
-";
+            $report_content .= "### Summary\n\n";
             my $total_requests =
               ( $stats->{count}{gemini} // 0 ) + ( $stats->{count}{web} // 0 );
-            $report_content .= "* Total requests: $total_requests
-";
+            $report_content .= "* Total requests: $total_requests\n";
             $report_content .=
-              "* Filtered requests: " . ( $stats->{count}{filtered} // 0 ) . "
-";
+              "* Filtered requests: " . ( $stats->{count}{filtered} // 0 ) . "\n";
             $report_content .=
-              "* Gemini requests: " . ( $stats->{count}{gemini} // 0 ) . "
-";
+              "* Gemini requests: " . ( $stats->{count}{gemini} // 0 ) . "\n";
             $report_content .=
-              "* Web requests: " . ( $stats->{count}{web} // 0 ) . "
-";
+              "* Web requests: " . ( $stats->{count}{web} // 0 ) . "\n";
             $report_content .=
-              "* IPv4 requests: " . ( $stats->{count}{IPv4} // 0 ) . "
-";
+              "* IPv4 requests: " . ( $stats->{count}{IPv4} // 0 ) . "\n";
             $report_content .=
-              "* IPv6 requests: " . ( $stats->{count}{IPv6} // 0 ) . "
-
-";
+              "* IPv6 requests: " . ( $stats->{count}{IPv6} // 0 ) . "\n\n";
 
             # Feed IPs
-            $report_content .= "### Feed Statistics
-
-";
+            $report_content .= "### Feed Statistics\n\n";
             my @feed_rows;
             push @feed_rows, [ 'Total', $stats->{feed_ips}{'Total'} // 0 ];
             push @feed_rows,
@@ -1083,19 +1069,13 @@ $content
               [ 'Web Gemfeed', $stats->{feed_ips}{'Web Gemfeed'} // 0 ];
             push @feed_rows,
               [ 'Web Atom', $stats->{feed_ips}{'Web Atom'} // 0 ];
-            $report_content .= "```
-";
+            $report_content .= "```\n";
             $report_content .=
               format_table( [ 'Feed Type', 'Count' ], \@feed_rows );
-            $report_content .= "
-```
-
-";
+            $report_content .= "\n```\n\n";
 
             # Page IPs (Hosts)
-            $report_content .= "### Page Statistics (by Host)
-
-";
+            $report_content .= "### Page Statistics (by Host)\n\n";
             my @host_rows;
             my $hosts = $stats->{page_ips}{hosts};
             my @sorted_hosts =
@@ -1108,25 +1088,17 @@ $content
             for my $host (@sorted_hosts) {
                 push @host_rows, [ $host, $hosts->{$host} // 0 ];
             }
-            $report_content .= "```
-";
+            $report_content .= "```\n";
             $report_content .=
               format_table( [ 'Host', 'Unique Visitors' ], \@host_rows );
-            $report_content .= "
-```
-";
+            $report_content .= "\n```\n";
             if ($truncated) {
-                $report_content .= "
-... and more (truncated to 50 entries).
-";
+                $report_content .= "\n... and more (truncated to 50 entries).\n";
             }
-            $report_content .= "
-";
+            $report_content .= "\n";
 
             # Page IPs (URLs)
-            $report_content .= "### Page Statistics (by URL)
-
-";
+            $report_content .= "### Page Statistics (by URL)\n\n";
             my @url_rows;
             my $urls = $stats->{page_ips}{urls};
             my @sorted_urls =
@@ -1141,20 +1113,14 @@ $content
 
             # Truncate URLs to fit within 100-character rows
             truncate_urls_for_table( \@url_rows, 'Unique Visitors' );
-            $report_content .= "```
-";
+            $report_content .= "```\n";
             $report_content .=
               format_table( [ 'URL', 'Unique Visitors' ], \@url_rows );
-            $report_content .= "
-```
-";
+            $report_content .= "\n```\n";
             if ($truncated) {
-                $report_content .= "
-... and more (truncated to 50 entries).
-";
+                $report_content .= "\n... and more (truncated to 50 entries).\n";
             }
-            $report_content .= "
-";
+            $report_content .= "\n";
 
             # Add links to summary reports
             $report_content .= "## Related Reports\n\n";
