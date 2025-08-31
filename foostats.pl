@@ -12,8 +12,8 @@ use experimental qw(builtin);
 use feature qw(refaliasing);
 no warnings qw(experimental::refaliasing);
 
-# TODO: UNDO
-use diagnostics;
+# Debugging aids like diagnostics are noisy in production.
+# Removed per review: enable locally when debugging only.
 
 use constant VERSION => 'v0.1.0';
 
@@ -111,10 +111,9 @@ package Foostats::Logreader {
     use Time::Piece;
     use String::Util qw(contains startswith endswith);
 
-    use constant {
-        GEMINI_LOGS_GLOB => '/var/log/daemon*',
-        WEB_LOGS_GLOB    => '/var/www/logs/access.log*',
-    };
+    # Make log locations configurable (env overrides) to enable testing.
+    sub gemini_logs_glob { $ENV{FOOSTATS_GEMINI_LOGS_GLOB} // '/var/log/daemon*' }
+    sub web_logs_glob    { $ENV{FOOSTATS_WEB_LOGS_GLOB}    // '/var/www/logs/access.log*' }
 
     sub anonymize_ip ($ip) {
         my $ip_proto =
@@ -197,7 +196,7 @@ package Foostats::Logreader {
             };
         }
 
-        read_lines WEB_LOGS_GLOB, sub ( $year, @line ) {
+        read_lines web_logs_glob(), sub ( $year, @line ) {
             $cb->( parse_web_line @line );
         };
     }
@@ -244,7 +243,7 @@ package Foostats::Logreader {
       # Expect one vger and one relayd log line per event! So collect
       # both events (one from one log line each) and then merge the result hash!
         my ( $vger, $relayd );
-        read_lines GEMINI_LOGS_GLOB, sub ( $year, @line ) {
+        read_lines gemini_logs_glob(), sub ( $year, @line ) {
             if ( $line[4] eq 'vger:' ) {
                 $vger = parse_vger_line $year, @line;
             }
@@ -321,6 +320,7 @@ package Foostats::Filter {
         \my $uri_path = \$event->{uri_path};
 
         for ( $self->{odds}->@* ) {
+            next if !defined $_ || $_ eq '' || /^\s*#/;
             next
               unless contains( $uri_path, $_ );
 
@@ -395,17 +395,21 @@ package Foostats::Aggregator {
         my $date     = $event->{date};
         my $date_key = $event->{proto} . "_$date";
 
+        # Stats data model per protocol+day (key: "proto_YYYYMMDD"):
+        # - count: per-proto request count, per IP version, and filtered count
+        # - feed_ips: unique IPs per feed type (atom_feed, gemfeed)
+        # - page_ips: unique IPs per host and per URL
         $self->{stats}{$date_key} //= {
             count => {
-                filtered => 0
+                filtered => 0,
             },
             feed_ips => {
                 atom_feed => {},
-                gemfeed   => {}
+                gemfeed   => {},
             },
             page_ips => {
                 hosts => {},
-                urls  => {}
+                urls  => {},
             },
         };
 
@@ -434,18 +438,19 @@ package Foostats::Aggregator {
         \my $f = \$stats->{feed_ips};
         \my $e = \$event;
 
-        if ( endswith( $e->{uri_path}, ATOM_FEED_URI ) ) {
+        # Atom feed (exact path match, allow optional query string)
+        if ( $e->{uri_path} =~ m{^/gemfeed/atom\.xml(?:[?#].*)?$} ) {
             ( $f->{atom_feed}->{ $e->{ip_hash} } //= 0 )++;
+            return 1;
         }
-        elsif ( contains( $e->{uri_path}, GEMFEED_URI ) ) {
+
+        # Gemfeed index: '/gemfeed/' or '/gemfeed/index.gmi' (optionally with query)
+        if ( $e->{uri_path} =~ m{^/gemfeed/(?:index\.gmi)?(?:[?#].*)?$} ) {
             ( $f->{gemfeed}->{ $e->{ip_hash} } //= 0 )++;
+            return 1;
         }
-        elsif ( endswith( $e->{uri_path}, GEMFEED_URI_2 ) ) {
-            ( $f->{gemfeed}->{ $e->{ip_hash} } //= 0 )++;
-        }
-        else {
-            0;
-        }
+
+        return 0;
     }
 
     sub add_page_ips ( $self, $stats, $event ) {
@@ -557,7 +562,7 @@ package Foostats::Replicator {
 }
 
 package Foostats::Merger {
-    use Data::Dumper;    # TODO: UNDO
+    # Removed Data::Dumper (debug-only) per review.
 
     sub merge ($stats_dir) {
         my %merge;
@@ -706,6 +711,7 @@ package Foostats::Merger {
 
 package Foostats::Reporter {
     use Time::Piece;
+    use HTML::Entities qw(encode_entities);
 
     sub truncate_url {
         my ( $url, $max_length ) = @_;
@@ -929,16 +935,7 @@ package Foostats::Reporter {
         return $str;
     }
     
-    # Encode HTML entities to prevent XSS
-    sub encode_entities {
-        my ($text) = @_;
-        $text =~ s/&/&amp;/g;
-        $text =~ s/</&lt;/g;
-        $text =~ s/>/&gt;/g;
-        $text =~ s/"/&quot;/g;
-        $text =~ s/'/&#39;/g;
-        return $text;
-    }
+    # Use HTML::Entities::encode_entities imported above
     
     # Generate HTML wrapper
     sub generate_html_page {
@@ -1481,7 +1478,7 @@ sub build_top3_urls_last_n_days_per_day {
     }
 }
 
-package main {
+package main;
     use Getopt::Long;
     use Sys::Hostname;
 
@@ -1524,54 +1521,58 @@ package main {
         $out->write;
     }
 
-    my ( $parse_logs, $replicate, $report, $all, $help, $version );
+    sub foostats_main {
+        my ( $parse_logs, $replicate, $report, $all, $help, $version );
 
-    # With default values
-    my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
-    my $odds_file = $stats_dir . '/fooodds.txt';
-    my $odds_log  = '/var/log/fooodds';
-    my $output_dir;  # Will default to $stats_dir/gemtext if not specified
-    my $html_output_dir;  # Will default to /var/www/htdocs/gemtexter/stats.foo.zone if not specified
-    my $partner_node =
-      hostname eq 'fishfinger.buetow.org'
-      ? 'blowfish.buetow.org'
-      : 'fishfinger.buetow.org';
+        # With default values
+        my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
+        my $odds_file = $stats_dir . '/fooodds.txt';
+        my $odds_log  = '/var/log/fooodds';
+        my $output_dir;       # Will default to $stats_dir/gemtext if not specified
+        my $html_output_dir;  # Will default to /var/www/htdocs/gemtexter/stats.foo.zone if not specified
+        my $partner_node =
+          hostname eq 'fishfinger.buetow.org'
+          ? 'blowfish.buetow.org'
+          : 'fishfinger.buetow.org';
 
-    GetOptions
-      'parse-logs!'    => \$parse_logs,
-      'filter-log=s'   => \$odds_log,
-      'odds-file=s'    => \$odds_file,
-      'replicate!'     => \$replicate,
-      'report!'        => \$report,
-      'all!'           => \$all,
-      'stats-dir=s'    => \$stats_dir,
-      'output-dir=s'   => \$output_dir,
-      'html-output-dir=s' => \$html_output_dir,
-      'partner-node=s' => \$partner_node,
-      'version'        => \$version,
-      'help|?'         => \$help;
+        GetOptions
+          'parse-logs!'       => \$parse_logs,
+          'filter-log=s'      => \$odds_log,
+          'odds-file=s'       => \$odds_file,
+          'replicate!'        => \$replicate,
+          'report!'           => \$report,
+          'all!'              => \$all,
+          'stats-dir=s'       => \$stats_dir,
+          'output-dir=s'      => \$output_dir,
+          'html-output-dir=s' => \$html_output_dir,
+          'partner-node=s'    => \$partner_node,
+          'version'           => \$version,
+          'help|?'            => \$help;
 
-    if ($version) {
-        print "foostats " . VERSION . "\n";
-        exit 0;
+        if ($version) {
+            print "foostats " . VERSION . "\n";
+            exit 0;
+        }
+
+        usage() if $help;
+
+        parse_logs( $stats_dir, $odds_file, $odds_log )
+          if $parse_logs
+          or $all;
+
+        Foostats::Replicator::replicate( $stats_dir, $partner_node )
+          if $replicate
+          or $all;
+
+        # Set default output directories if not specified
+        $output_dir //= '/var/gemini/stats.foo.zone';
+        $html_output_dir //= '/var/www/htdocs/gemtexter/stats.foo.zone';
+
+        Foostats::Reporter::report( $stats_dir, $output_dir, $html_output_dir,
+            Foostats::Merger::merge($stats_dir) )
+          if $report
+          or $all;
     }
 
-    usage() if $help;
-
-    parse_logs( $stats_dir, $odds_file, $odds_log )
-      if $parse_logs
-      or $all;
-
-    Foostats::Replicator::replicate( $stats_dir, $partner_node )
-      if $replicate
-      or $all;
-
-    # Set default output directories if not specified
-    $output_dir //= '/var/gemini/stats.foo.zone';
-    $html_output_dir //= '/var/www/htdocs/gemtexter/stats.foo.zone';
-    
-    Foostats::Reporter::report( $stats_dir, $output_dir, $html_output_dir,
-        Foostats::Merger::merge($stats_dir) )
-      if $report
-      or $all;
-}
+    # Only run main flow when executed as a script, not when required (e.g., tests)
+    foostats_main() unless caller;

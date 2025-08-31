@@ -1,0 +1,18 @@
+# Perltidy configuration for foostats
+
+# Line length and indentation
+-l=100
+-i=4
+-ci=4
+
+# Vertical and parenthesis tightness
+-vt=2
+-pt=2
+
+# Backup original and write in place
+-b
+-bext=.bak
+
+# Keep errors summary
+-se
+

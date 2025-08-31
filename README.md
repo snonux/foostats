@@ -17,8 +17,18 @@ A privacy-respecting web analytics tool for OpenBSD that processes HTTP/HTTPS an
 On OpenBSD, install dependencies:
 
 ```sh
-doas pkg_add p5-Digest-SHA3 p5-PerlIO-gzip p5-JSON p5-String-Util p5-LWP-Protocol-https
+doas pkg_add p5-Digest-SHA3 p5-PerlIO-gzip p5-JSON p5-String-Util p5-LWP-Protocol-https p5-HTML-Parser perltidy
 ```
+
+## Dependencies
+
+- Perl 5.38+
+- Core: `Time::Piece`, `Getopt::Long`, `Sys::Hostname`, `File::Basename`
+- CPAN/Packages: `Digest::SHA3`, `PerlIO::gzip`, `JSON`, `String::Util`, `LWP::UserAgent` (and HTTPS support), `HTML::Entities`
+
+Notes:
+- On OpenBSD the packages are: `p5-Digest-SHA3`, `p5-PerlIO-gzip`, `p5-JSON`, `p5-String-Util`, `p5-LWP-Protocol-https`, `p5-HTML-Parser` (provides `HTML::Entities`).
+- The script expects Perl 5.38 features; adjust accordingly if running older Perl.
 
 ## Usage
 
@@ -129,3 +139,19 @@ Reports include:
 ## License
 
 BSD 3-Clause License (see LICENSE file)
+## Testing
+
+Basic test suite using Test::More is included under `t/`.
+
+- Run all tests: `prove -lr t`
+- The script now avoids running its CLI when loaded via `require`, enabling unit testing of internal packages.
+
+## Development
+
+- Format: `just format` (uses `.perltidyrc`, requires `perltidy`)
+- Test: `just test` (uses `prove` if available, otherwise runs tests via `perl`)
+- Lint/syntax: `just check`
+- Cleanup: `just clean`
+- Generate reports (from repo's `stats/`): `just reports`
+
+Tip: install `just` (a command runner) for convenience.
