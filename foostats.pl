@@ -86,6 +86,22 @@ package DateHelper {
 
         return @dates;
     }
+
+    sub last_n_months_day_dates ($months) {
+        my $today = localtime;
+        my $start_year  = $today->year;
+        my $start_month = $today->mon - $months;
+        while ($start_month <= 0) { $start_month += 12; $start_year--; }
+
+        my $start = Time::Piece->strptime(sprintf('%04d-%02d-01', $start_year, $start_month), '%Y-%m-%d');
+        my @dates;
+        my $t = $start;
+        while ($t <= $today) {
+            push @dates, $t->strftime('%Y%m%d');
+            $t += 24 * 60 * 60; # one day
+        }
+        return @dates;
+    }
 }
 
 package Foostats::Logreader {
@@ -1041,23 +1057,7 @@ $content
 
             $report_content .= "## Stats for $year-$month-$day\n\n";
 
-            # Summary
-            $report_content .= "### Summary\n\n";
-            my $total_requests =
-              ( $stats->{count}{gemini} // 0 ) + ( $stats->{count}{web} // 0 );
-            $report_content .= "* Total requests: $total_requests\n";
-            $report_content .=
-              "* Filtered requests: " . ( $stats->{count}{filtered} // 0 ) . "\n";
-            $report_content .=
-              "* Gemini requests: " . ( $stats->{count}{gemini} // 0 ) . "\n";
-            $report_content .=
-              "* Web requests: " . ( $stats->{count}{web} // 0 ) . "\n";
-            $report_content .=
-              "* IPv4 requests: " . ( $stats->{count}{IPv4} // 0 ) . "\n";
-            $report_content .=
-              "* IPv6 requests: " . ( $stats->{count}{IPv6} // 0 ) . "\n\n";
-
-            # Feed IPs
+            # Feed counts first
             $report_content .= "### Feed Statistics\n\n";
             my @feed_rows;
             push @feed_rows, [ 'Total', $stats->{feed_ips}{'Total'} // 0 ];
@@ -1073,38 +1073,14 @@ $content
             $report_content .=
               format_table( [ 'Feed Type', 'Count' ], \@feed_rows );
             $report_content .= "\n```\n\n";
-
-            # Page IPs (Hosts)
-            $report_content .= "### Page Statistics (by Host)\n\n";
-            my @host_rows;
-            my $hosts = $stats->{page_ips}{hosts};
-            my @sorted_hosts =
-              sort { ( $hosts->{$b} // 0 ) <=> ( $hosts->{$a} // 0 ) }
-              keys %$hosts;
-
-            my $truncated = @sorted_hosts > 50;
-            @sorted_hosts = @sorted_hosts[ 0 .. 49 ] if $truncated;
-
-            for my $host (@sorted_hosts) {
-                push @host_rows, [ $host, $hosts->{$host} // 0 ];
-            }
-            $report_content .= "```\n";
-            $report_content .=
-              format_table( [ 'Host', 'Unique Visitors' ], \@host_rows );
-            $report_content .= "\n```\n";
-            if ($truncated) {
-                $report_content .= "\n... and more (truncated to 50 entries).\n";
-            }
-            $report_content .= "\n";
-
-            # Page IPs (URLs)
-            $report_content .= "### Page Statistics (by URL)\n\n";
+            # Top 50 URLs next
+            $report_content .= "### Top 50 URLs\n\n";
             my @url_rows;
             my $urls = $stats->{page_ips}{urls};
             my @sorted_urls =
               sort { ( $urls->{$b} // 0 ) <=> ( $urls->{$a} // 0 ) }
               keys %$urls;
-            $truncated   = @sorted_urls > 50;
+            my $truncated   = @sorted_urls > 50;
             @sorted_urls = @sorted_urls[ 0 .. 49 ] if $truncated;
 
             for my $url (@sorted_urls) {
@@ -1122,14 +1098,50 @@ $content
             }
             $report_content .= "\n";
 
-            # Add links to summary reports
+            # Other tables afterwards: Hosts, then Summary
+            $report_content .= "### Page Statistics (by Host)\n\n";
+            my @host_rows;
+            my $hosts = $stats->{page_ips}{hosts};
+            my @sorted_hosts =
+              sort { ( $hosts->{$b} // 0 ) <=> ( $hosts->{$a} // 0 ) }
+              keys %$hosts;
+
+            $truncated = @sorted_hosts > 50;
+            @sorted_hosts = @sorted_hosts[ 0 .. 49 ] if $truncated;
+
+            for my $host (@sorted_hosts) {
+                push @host_rows, [ $host, $hosts->{$host} // 0 ];
+            }
+            $report_content .= "```\n";
+            $report_content .=
+              format_table( [ 'Host', 'Unique Visitors' ], \@host_rows );
+            $report_content .= "\n```\n";
+            if ($truncated) {
+                $report_content .= "\n... and more (truncated to 50 entries).\n";
+            }
+            $report_content .= "\n";
+
+            # Summary last
+            $report_content .= "### Summary\n\n";
+            my $total_requests =
+              ( $stats->{count}{gemini} // 0 ) + ( $stats->{count}{web} // 0 );
+            $report_content .= "* Total requests: $total_requests\n";
+            $report_content .=
+              "* Filtered requests: " . ( $stats->{count}{filtered} // 0 ) . "\n";
+            $report_content .=
+              "* Gemini requests: " . ( $stats->{count}{gemini} // 0 ) . "\n";
+            $report_content .=
+              "* Web requests: " . ( $stats->{count}{web} // 0 ) . "\n";
+            $report_content .=
+              "* IPv4 requests: " . ( $stats->{count}{IPv4} // 0 ) . "\n";
+            $report_content .=
+              "* IPv6 requests: " . ( $stats->{count}{IPv6} // 0 ) . "\n\n";
+
+            # Add links to summary reports (only monthly)
             $report_content .= "## Related Reports\n\n";
             my $now           = localtime;
             my $current_date = $now->strftime('%Y%m%d');
-            $report_content .= "=> ./7day_summary_$current_date.gmi 7-Day Summary Report\n";
-            $report_content .= "=> ./30day_summary_$current_date.gmi 30-Day Summary Report\n";
-            $report_content .= "=> ./365day_summary_$current_date.gmi 365-Day Summary Report\n";
-            $report_content .= "=> ./index.gmi Back to Index\n\n";
+            $report_content .= "=> ./30day_summary_$current_date.gmi 30-Day Summary Report\n\n";
 
             # Ensure output directory exists
             mkdir $output_dir unless -d $output_dir;
@@ -1148,9 +1160,7 @@ $content
         }
 
         # Generate summary reports
-        generate_summary_report( 7, $stats_dir, $output_dir, $html_output_dir, %merged );
         generate_summary_report( 30, $stats_dir, $output_dir, $html_output_dir, %merged );
-        generate_summary_report( 365, $stats_dir, $output_dir, $html_output_dir, %merged );
         
         # Generate index.gmi and index.html
         generate_index( $output_dir, $html_output_dir );
@@ -1169,14 +1179,16 @@ $content
 
         # Build report content
         my $report_content = build_report_header($today, $days);
-        $report_content .= build_daily_summary_section( \@dates, \%merged );
+        # Order: feed counts -> Top URLs -> daily top 3 for last 30 days -> other tables
         $report_content .= build_feed_statistics_section( \@dates, \%merged );
 
         # Aggregate and add top lists
         my ( $all_hosts, $all_urls ) =
           aggregate_hosts_and_urls( \@dates, \%merged );
-        $report_content .= build_top_hosts_section($all_hosts);
-        $report_content .= build_top_urls_section($all_urls);
+        $report_content .= build_top_urls_section($all_urls, $days);
+        $report_content .= build_top3_urls_last_n_days_per_day($stats_dir, 30, \%merged);
+        $report_content .= build_top_hosts_section($all_hosts, $days);
+        $report_content .= build_daily_summary_section( \@dates, \%merged );
 
         # Add links to other summary reports
         $report_content .= build_summary_links($days, $report_date);
@@ -1319,9 +1331,10 @@ $content
     }
 
     sub build_top_hosts_section {
-        my ($all_hosts) = @_;
+        my ($all_hosts, $days) = @_;
+        $days //= 30;
 
-        my $content = "## Top 50 Hosts (30-Day Total)\n\n```\n";
+        my $content = "## Top 50 Hosts (${days}-Day Total)\n\n```\n";
 
         my @host_rows;
         my @sorted_hosts =
@@ -1339,9 +1352,10 @@ $content
     }
 
     sub build_top_urls_section {
-        my ($all_urls) = @_;
+        my ($all_urls, $days) = @_;
+        $days //= 30;
 
-        my $content = "## Top 50 URLs (30-Day Total)\n\n```\n";
+        my $content = "## Top 50 URLs (${days}-Day Total)\n\n```\n";
 
         my @url_rows;
         my @sorted_urls =
@@ -1364,107 +1378,105 @@ $content
     sub build_summary_links {
         my ( $current_days, $report_date ) = @_;
 
-        my $content = "## Other Summary Reports\n\n";
-        
-        # Add links to other summary periods
-        my @periods = (7, 30, 365);
-        
-        for my $days (@periods) {
-            next if $days == $current_days;  # Skip current report type
-            $content .= "=> ./${days}day_summary_$report_date.gmi ${days}-Day Summary Report\n";
+        my $content = '';
+        # Only add link to 30-day summary when not on the 30-day report itself
+        if ($current_days != 30) {
+            $content .= "## Other Summary Reports\n\n";
+            $content .= "=> ./30day_summary_$report_date.gmi 30-Day Summary Report\n\n";
         }
-        
-        # Add link to index
-        $content .= "\n=> ./index.gmi Back to Index\n";
 
         return $content;
     }
+
+sub build_top3_urls_last_n_days_per_day {
+    my ($stats_dir, $days, $merged) = @_;
+    $days //= 30;
+    my $content = "## Top 3 URLs Per Day (Last ${days} Days)\n\n";
+
+    my @all = DateHelper::last_month_dates();
+    my @dates = @all;
+    @dates = @all[0 .. $days-1] if @all > $days;
+    return $content . "(no data)\n\n" unless @dates;
+
+        for my $date (@dates) {
+            # Prefer in-memory merged stats if available; otherwise merge from disk
+            my $stats = $merged->{$date};
+            if (!$stats || !($stats->{page_ips} && $stats->{page_ips}{urls})) {
+                $stats = Foostats::Merger::merge_for_date($stats_dir, $date);
+            }
+            next unless $stats && $stats->{page_ips} && $stats->{page_ips}{urls};
+
+            my ($y,$m,$d) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+            $content .= "### $y-$m-$d\n\n";
+
+            my $urls = $stats->{page_ips}{urls};
+            my @sorted = sort { ($urls->{$b}//0) <=> ($urls->{$a}//0) } keys %$urls;
+            next unless @sorted;
+            my $limit = @sorted < 3 ? @sorted : 3;
+            @sorted = @sorted[0..$limit-1];
+
+            my @rows;
+            for my $u (@sorted) { push @rows, [ $u, $urls->{$u} // 0 ]; }
+            truncate_urls_for_table( \@rows, 'Visitors' );
+            $content .= "```\n" . format_table([ 'URL', 'Visitors' ], \@rows) . "\n```\n\n";
+    }
+
+    return $content;
+}
     
     sub generate_index {
         my ($output_dir, $html_output_dir) = @_;
-        
-        # Get all .gmi files in the output directory
+
+        # Find latest 30-day summary
         opendir(my $dh, $output_dir) or die "Cannot open directory $output_dir: $!";
         my @gmi_files = grep { /\.gmi$/ && $_ ne 'index.gmi' } readdir($dh);
         closedir($dh);
-        
-        # Sort files by type and date (newest first)
-        my @summaries_7day = sort { $b cmp $a } grep { /^7day_summary_/ } @gmi_files;
+
         my @summaries_30day = sort { $b cmp $a } grep { /^30day_summary_/ } @gmi_files;
-        my @summaries_365day = sort { $b cmp $a } grep { /^365day_summary_/ } @gmi_files;
-        my @daily = sort { $b cmp $a } grep { /^\d{8}\.gmi$/ } @gmi_files;
-        
-        # Build index content
-        my $content = "# Foostats Reports Index\n\n";
-        $content .= "Generated on " . localtime->strftime('%Y-%m-%d %H:%M:%S') . "\n\n";
-        
-        # Add 7-day summaries
-        if (@summaries_7day) {
-            $content .= "## 7-Day Summary Reports\n\n";
-            for my $summary (@summaries_7day) {
-                my ($date) = $summary =~ /7day_summary_(\d{8})\.gmi/;
-                if ($date) {
-                    my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
-                    $content .= "=> ./$summary 7-Day Summary ($year-$month-$day)\n";
-                }
-            }
-            $content .= "\n";
-        }
-        
-        # Add 30-day summaries
-        if (@summaries_30day) {
-            $content .= "## 30-Day Summary Reports\n\n";
-            for my $summary (@summaries_30day) {
-                my ($date) = $summary =~ /30day_summary_(\d{8})\.gmi/;
-                if ($date) {
-                    my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
-                    $content .= "=> ./$summary 30-Day Summary ($year-$month-$day)\n";
-                }
-            }
-            $content .= "\n";
-        }
-        
-        # Add 365-day summaries
-        if (@summaries_365day) {
-            $content .= "## 365-Day Summary Reports\n\n";
-            for my $summary (@summaries_365day) {
-                my ($date) = $summary =~ /365day_summary_(\d{8})\.gmi/;
-                if ($date) {
-                    my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
-                    $content .= "=> ./$summary 365-Day Summary ($year-$month-$day)\n";
-                }
-            }
-            $content .= "\n";
-        }
-        
-        if (@daily) {
-            $content .= "## Daily Reports\n\n";
-            my $count = 0;
-            for my $daily_file (@daily) {
-                last if ++$count > 90;  # Show only last 90 days
-                my ($date) = $daily_file =~ /(\d{8})\.gmi/;
-                if ($date) {
-                    my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
-                    $content .= "=> ./$daily_file $year-$month-$day\n";
-                }
-            }
-            if (@daily > 90) {
-                $content .= "\n(Showing most recent 90 daily reports)\n";
-            }
-            $content .= "\n";
-        }
-        
-        # Write index file
+        my $latest_30 = $summaries_30day[0];
+
         my $index_path = "$output_dir/index.gmi";
-        say "Writing index to $index_path";
-        FileHelper::write($index_path, $content);
-        
-        # Also write HTML version
         mkdir $html_output_dir unless -d $html_output_dir;
         my $html_path = "$html_output_dir/index.html";
-        my $html_content = gemtext_to_html($content);
+
+        if ($latest_30) {
+            # Read 30-day summary content and use it as index
+            my $summary_path = "$output_dir/$latest_30";
+            open my $sfh, '<', $summary_path or die "$summary_path: $!";
+            local $/ = undef;
+            my $content = <$sfh>;
+            close $sfh;
+
+            say "Writing index to $index_path (using $latest_30)";
+            FileHelper::write($index_path, $content);
+
+            # HTML: use existing 30-day summary HTML if present, else convert
+            (my $latest_html = $latest_30) =~ s/\.gmi$/.html/;
+            my $summary_html_path = "$html_output_dir/$latest_html";
+            if (-e $summary_html_path) {
+                open my $hh, '<', $summary_html_path or die "$summary_html_path: $!";
+                local $/ = undef;
+                my $html_page = <$hh>;
+                close $hh;
+                say "Writing HTML index to $html_path (copy of $latest_html)";
+                FileHelper::write($html_path, $html_page);
+            } else {
+                my $html_content = gemtext_to_html($content);
+                my $html_page = generate_html_page("30-Day Summary Report", $html_content);
+                say "Writing HTML index to $html_path (from gemtext)";
+                FileHelper::write($html_path, $html_page);
+            }
+            return;
+        }
+
+        # Fallback: minimal index if no 30-day summary found
+        my $fallback = "# Foostats Reports Index\n\n30-day summary not found.\n";
+        say "Writing fallback index to $index_path";
+        FileHelper::write($index_path, $fallback);
+
+        my $html_content = gemtext_to_html($fallback);
         my $html_page = generate_html_page("Foostats Reports Index", $html_content);
-        say "Writing HTML index to $html_path";
+        say "Writing fallback HTML index to $html_path";
         FileHelper::write($html_path, $html_page);
     }
 }
