@@ -1237,7 +1237,7 @@ $content
         }
 
         $content .= format_table(
-            [ 'Date', 'Total', 'Filtered', 'Gemini', 'Web', 'IPv4', 'IPv6' ],
+            [ 'Date', 'Filtered', 'Gemini', 'Web', 'IPv4', 'IPv6', 'Total' ],
             \@summary_rows );
         $content .= "\n```\n\n";
 
@@ -1259,9 +1259,9 @@ $content
         my $ipv6     = $stats->{count}{IPv6}     // 0;
 
         return [
-            $formatted_date, $total_requests, $filtered,
+            $formatted_date, $filtered,
             $gemini,         $web,            $ipv4,
-            $ipv6
+            $ipv6,           $total_requests
         ];
     }
 
@@ -1279,7 +1279,7 @@ $content
         }
 
         $content .= format_table(
-            [ 'Date', 'Total', 'Gem Feed', 'Gem Atom', 'Web Feed', 'Web Atom' ],
+            [ 'Date', 'Gem Feed', 'Gem Atom', 'Web Feed', 'Web Atom', 'Total' ],
             \@feed_rows
         );
         $content .= "\n```\n\n";
@@ -1295,11 +1295,11 @@ $content
 
         return [
             $formatted_date,
-            $stats->{feed_ips}{'Total'}          // 0,
             $stats->{feed_ips}{'Gemini Gemfeed'} // 0,
             $stats->{feed_ips}{'Gemini Atom'}    // 0,
             $stats->{feed_ips}{'Web Gemfeed'}    // 0,
-            $stats->{feed_ips}{'Web Atom'}       // 0
+            $stats->{feed_ips}{'Web Atom'}       // 0,
+            $stats->{feed_ips}{'Total'}          // 0
         ];
     }
 
@@ -1391,7 +1391,7 @@ $content
 sub build_top3_urls_last_n_days_per_day {
     my ($stats_dir, $days, $merged) = @_;
     $days //= 30;
-    my $content = "## Top 3 URLs Per Day (Last ${days} Days)\n\n";
+    my $content = "## Top 5 URLs Per Day (Last ${days} Days)\n\n";
 
     my @all = DateHelper::last_month_dates();
     my @dates = @all;
@@ -1412,7 +1412,7 @@ sub build_top3_urls_last_n_days_per_day {
             my $urls = $stats->{page_ips}{urls};
             my @sorted = sort { ($urls->{$b}//0) <=> ($urls->{$a}//0) } keys %$urls;
             next unless @sorted;
-            my $limit = @sorted < 3 ? @sorted : 3;
+            my $limit = @sorted < 5 ? @sorted : 5;
             @sorted = @sorted[0..$limit-1];
 
             my @rows;
