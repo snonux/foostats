@@ -113,25 +113,7 @@ package DateHelper {
         return @dates;
     }
 
-    # Sub: last_n_months_day_dates
-    # - Purpose: Return all day dates from N months ago (month start) up to today.
-    # - Params: $months (int) number of months to look back.
-    # - Return: list of YYYYMMDD strings, oldest to newest.
-    sub last_n_months_day_dates ($months) {
-        my $today       = localtime;
-        my $start_year  = $today->year;
-        my $start_month = $today->mon - $months;
-        while ($start_month <= 0) { $start_month += 12; $start_year--; }
-
-        my $start = Time::Piece->strptime(sprintf('%04d-%02d-01', $start_year, $start_month), '%Y-%m-%d');
-        my @dates;
-        my $t = $start;
-        while ($t <= $today) {
-            push @dates, $t->strftime('%Y%m%d');
-            $t += 24 * 60 * 60;    # one day
-        }
-        return @dates;
-    }
+    
 }
 
 # Package: Foostats::Logreader — parse and normalize logs
