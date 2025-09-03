@@ -24,9 +24,16 @@ use constant VERSION => 'v0.1.0';
 # * Nicely formatted .txt output by stats by count by date
 # * Print out all UAs, to add new excludes/blocked IPs
 
+# Package: FileHelper — small file/JSON helpers
+# - Purpose: Atomic writes, gzip JSON read/write, and line reading.
+# - Notes: Dies on I/O errors; JSON encoding uses core JSON.
 package FileHelper {
     use JSON;
 
+    # Sub: write
+    # - Purpose: Atomic write to a file via "$path.tmp" and rename.
+    # - Params: $path (str) destination; $content (str) contents to write.
+    # - Return: undef; dies on failure.
     sub write ($path, $content) {
         open my $fh, '>', "$path.tmp"
             or die "\nCannot open file: $!";
@@ -38,6 +45,10 @@ package FileHelper {
             $path;
     }
 
+    # Sub: write_json_gz
+    # - Purpose: JSON-encode $data and write it gzipped atomically.
+    # - Params: $path (str) destination path; $data (ref/scalar) Perl data.
+    # - Return: undef; dies on failure.
     sub write_json_gz ($path, $data) {
         my $json = encode_json $data;
 
@@ -51,6 +62,10 @@ package FileHelper {
             or die "$path.tmp: $!";
     }
 
+    # Sub: read_json_gz
+    # - Purpose: Read a gzipped JSON file and decode to Perl data.
+    # - Params: $path (str) path to .json.gz file.
+    # - Return: Perl data structure.
     sub read_json_gz ($path) {
         say "Reading $path";
         open my $fd, '<:gzip', $path
@@ -60,6 +75,10 @@ package FileHelper {
         return $json;
     }
 
+    # Sub: read_lines
+    # - Purpose: Slurp file lines and chomp newlines.
+    # - Params: $path (str) file path.
+    # - Return: list of lines (no trailing newlines).
     sub read_lines ($path) {
         my @lines;
         open(my $fh, '<', $path)
@@ -70,9 +89,16 @@ package FileHelper {
     }
 }
 
+# Package: DateHelper — date range helpers
+# - Purpose: Produce date strings used for report windows.
+# - Format: Dates are returned as YYYYMMDD strings.
 package DateHelper {
     use Time::Piece;
 
+    # Sub: last_month_dates
+    # - Purpose: Return dates for today back to 30 days ago (inclusive).
+    # - Params: none.
+    # - Return: list of YYYYMMDD strings, newest first.
     sub last_month_dates () {
         my $today = localtime;
         my @dates;
@@ -87,6 +113,10 @@ package DateHelper {
         return @dates;
     }
 
+    # Sub: last_n_months_day_dates
+    # - Purpose: Return all day dates from N months ago (month start) up to today.
+    # - Params: $months (int) number of months to look back.
+    # - Return: list of YYYYMMDD strings, oldest to newest.
     sub last_n_months_day_dates ($months) {
         my $today       = localtime;
         my $start_year  = $today->year;
@@ -104,6 +134,9 @@ package DateHelper {
     }
 }
 
+# Package: Foostats::Logreader — parse and normalize logs
+# - Purpose: Read web and gemini logs, anonymize IPs, and emit normalized events.
+# - Output Event: { proto, host, ip_hash, ip_proto, date, time, uri_path, status }
 package Foostats::Logreader {
     use Digest::SHA3 'sha3_512_base64';
     use File::stat;
@@ -112,9 +145,19 @@ package Foostats::Logreader {
     use String::Util qw(contains startswith endswith);
 
     # Make log locations configurable (env overrides) to enable testing.
+    # Sub: gemini_logs_glob
+    # - Purpose: Glob for gemini-related logs; env override for testing.
+    # - Return: glob pattern string.
     sub gemini_logs_glob { $ENV{FOOSTATS_GEMINI_LOGS_GLOB} // '/var/log/daemon*' }
+    # Sub: web_logs_glob
+    # - Purpose: Glob for web access logs; env override for testing.
+    # - Return: glob pattern string.
     sub web_logs_glob    { $ENV{FOOSTATS_WEB_LOGS_GLOB}    // '/var/www/logs/access.log*' }
 
+    # Sub: anonymize_ip
+    # - Purpose: Classify IPv4/IPv6 and map IP to a stable SHA3-512 base64 hash.
+    # - Params: $ip (str) source IP.
+    # - Return: ($hash, $proto) where $proto is 'IPv4' or 'IPv6'.
     sub anonymize_ip ($ip) {
         my $ip_proto =
             contains($ip, ':')
@@ -124,6 +167,10 @@ package Foostats::Logreader {
         return ($ip_hash, $ip_proto);
     }
 
+    # Sub: read_lines
+    # - Purpose: Iterate files matching glob by age; invoke $cb for each line.
+    # - Params: $glob (str) file glob; $cb (code) callback ($year, @fields).
+    # - Return: undef; stops early if callback returns undef for a file.
     sub read_lines ($glob, $cb) {
         my sub year ($path) {
             localtime((stat $path)->mtime)->strftime('%Y');
@@ -166,6 +213,10 @@ package Foostats::Logreader {
         }
     }
 
+    # Sub: parse_web_logs
+    # - Purpose: Parse web log lines into normalized events and pass to callback.
+    # - Params: $last_processed_date (YYYYMMDD int) lower bound; $cb (code) event consumer.
+    # - Return: undef.
     sub parse_web_logs ($last_processed_date, $cb) {
         my sub parse_date ($date) {
             my $t = Time::Piece->strptime($date, '[%d/%b/%Y:%H:%M:%S');
@@ -201,6 +252,10 @@ package Foostats::Logreader {
         };
     }
 
+    # Sub: parse_gemini_logs
+    # - Purpose: Parse vger/relayd lines, merge paired entries, and emit events.
+    # - Params: $last_processed_date (YYYYMMDD int); $cb (code) event consumer.
+    # - Return: undef.
     sub parse_gemini_logs ($last_processed_date, $cb) {
         my sub parse_date ($year, @line) {
             my $timestr = "$line[0] $line[1]";
@@ -266,6 +321,10 @@ package Foostats::Logreader {
         };
     }
 
+    # Sub: parse_logs
+    # - Purpose: Coordinate parsing for both web and gemini, aggregating into stats.
+    # - Params: $last_web_date, $last_gemini_date (YYYYMMDD int), $odds_file, $odds_log.
+    # - Return: stats hashref keyed by "proto_YYYYMMDD".
     sub parse_logs ($last_web_date, $last_gemini_date, $odds_file, $odds_log) {
         my $agg = Foostats::Aggregator->new($odds_file, $odds_log);
 
@@ -284,9 +343,16 @@ package Foostats::Logreader {
 }
 
 # TODO: Write filter summary at the end of the filter log.
+# Package: Foostats::Filter — request filtering and logging
+# - Purpose: Identify odd URI patterns and excessive requests per second per IP.
+# - Notes: Maintains an in-process blocklist for the current run.
 package Foostats::Filter {
     use String::Util qw(contains startswith endswith);
 
+    # Sub: new
+    # - Purpose: Construct a filter with odd patterns and a log path.
+    # - Params: $odds_file (str) pattern list; $log_path (str) append-only log file.
+    # - Return: blessed Foostats::Filter instance.
     sub new ($class, $odds_file, $log_path) {
         say "Logging filter to $log_path";
         my @odds = FileHelper::read_lines($odds_file);
@@ -298,6 +364,10 @@ package Foostats::Filter {
             $class;
     }
 
+    # Sub: ok
+    # - Purpose: Check if an event passes filters; updates block state/logging.
+    # - Params: $event (hashref) normalized request.
+    # - Return: true if allowed; false if blocked.
     sub ok ($self, $event) {
         state %blocked = ();
         return false
@@ -314,6 +384,10 @@ package Foostats::Filter {
         }
     }
 
+    # Sub: odd
+    # - Purpose: Match URI path against user-provided odd patterns (substring match).
+    # - Params: $event (hashref) with uri_path.
+    # - Return: true if odd (blocked), false otherwise.
     sub odd ($self, $event) {
         \my $uri_path = \$event->{uri_path};
 
@@ -330,6 +404,10 @@ package Foostats::Filter {
         return false;
     }
 
+    # Sub: log
+    # - Purpose: Deduplicated append-only logging for filter decisions.
+    # - Params: $severity (OK|WARN), $subject (str), $message (str).
+    # - Return: undef.
     sub log ($self, $severity, $subject, $message) {
         state %dedup;
 
@@ -344,6 +422,10 @@ package Foostats::Filter {
         close($fh);
     }
 
+    # Sub: excessive
+    # - Purpose: Block if an IP makes more than one request within the same second.
+    # - Params: $event (hashref) with time and ip_hash.
+    # - Return: true if blocked; false otherwise.
     sub excessive ($self, $event) {
         \my $time    = \$event->{time};
         \my $ip_hash = \$event->{ip_hash};
@@ -367,6 +449,8 @@ package Foostats::Filter {
     }
 }
 
+# Package: Foostats::Aggregator — in-memory stats builder
+# - Purpose: Apply filters and accumulate counts, unique IPs per feed/page.
 package Foostats::Aggregator {
     use String::Util qw(contains startswith endswith);
 
@@ -376,6 +460,10 @@ package Foostats::Aggregator {
         GEMFEED_URI_2 => '/gemfeed/',
     };
 
+    # Sub: new
+    # - Purpose: Construct aggregator with a filter and empty stats store.
+    # - Params: $odds_file (str), $odds_log (str).
+    # - Return: Foostats::Aggregator instance.
     sub new ($class, $odds_file, $odds_log) {
         bless {
             filter => Foostats::Filter->new($odds_file, $odds_log),
@@ -384,6 +472,10 @@ package Foostats::Aggregator {
             $class;
     }
 
+    # Sub: add
+    # - Purpose: Apply filter, update counts and unique-IP sets, and return event.
+    # - Params: $event (hashref) normalized event; ignored if undef.
+    # - Return: $event; filtered events increment filtered count only.
     sub add ($self, $event) {
         return undef
             unless defined $event;
@@ -420,6 +512,10 @@ package Foostats::Aggregator {
         return $event;
     }
 
+    # Sub: add_count
+    # - Purpose: Increment totals by protocol and IP version.
+    # - Params: $stats (hashref) date bucket; $event (hashref).
+    # - Return: undef.
     sub add_count ($self, $stats, $event) {
         \my $c = \$stats->{count};
         \my $e = \$event;
@@ -428,6 +524,10 @@ package Foostats::Aggregator {
         ($c->{ $e->{ip_proto} } //= 0)++;
     }
 
+    # Sub: add_feed_ips
+    # - Purpose: If event hits feed endpoints, add unique IP and short-circuit.
+    # - Params: $stats (hashref), $event (hashref).
+    # - Return: 1 if feed matched; 0 otherwise.
     sub add_feed_ips ($self, $stats, $event) {
         \my $f = \$stats->{feed_ips};
         \my $e = \$event;
@@ -447,6 +547,10 @@ package Foostats::Aggregator {
         return 0;
     }
 
+    # Sub: add_page_ips
+    # - Purpose: Track unique IPs per host and per URL for .html/.gmi pages.
+    # - Params: $stats (hashref), $event (hashref).
+    # - Return: undef.
     sub add_page_ips ($self, $stats, $event) {
         \my $e = \$event;
         \my $p = \$stats->{page_ips};
@@ -461,11 +565,17 @@ package Foostats::Aggregator {
     }
 }
 
+# Package: Foostats::FileOutputter — write per-day stats to disk
+# - Purpose: Persist aggregated stats to gzipped JSON files under a stats dir.
 package Foostats::FileOutputter {
     use JSON;
     use Sys::Hostname;
     use PerlIO::gzip;
 
+    # Sub: new
+    # - Purpose: Create outputter with stats_dir; ensures directory exists.
+    # - Params: %args (hash) must include stats_dir.
+    # - Return: Foostats::FileOutputter instance.
     sub new ($class, %args) {
         my $self = bless \%args, $class;
         mkdir $self->{stats_dir}
@@ -475,6 +585,10 @@ package Foostats::FileOutputter {
         return $self;
     }
 
+    # Sub: last_processed_date
+    # - Purpose: Determine the most recent processed date for a protocol for this host.
+    # - Params: $proto (str) 'web' or 'gemini'.
+    # - Return: YYYYMMDD int (0 if none found).
     sub last_processed_date ($self, $proto) {
         my $hostname  = hostname();
         my @processed = glob $self->{stats_dir} . "/${proto}_????????.$hostname.json.gz";
@@ -486,6 +600,10 @@ package Foostats::FileOutputter {
         return int($date);
     }
 
+    # Sub: write
+    # - Purpose: Write one gzipped JSON file per date bucket to stats_dir.
+    # - Params: none (uses $self->{stats}).
+    # - Return: undef.
     sub write ($self) {
         $self->for_dates(
             sub ($self, $date_key, $stats) {
@@ -498,18 +616,28 @@ package Foostats::FileOutputter {
         );
     }
 
+    # Sub: for_dates
+    # - Purpose: Iterate date-keyed stats in sorted order and call $cb.
+    # - Params: $cb (code) receives ($self, $date_key, $stats).
+    # - Return: undef.
     sub for_dates ($self, $cb) {
         $cb->($self, $_, $self->{stats}{$_}) for sort
             keys $self->{stats}->%*;
     }
 }
 
+# Package: Foostats::Replicator — pull partner stats files over HTTP(S)
+# - Purpose: Fetch recent partner node stats into local stats dir.
 package Foostats::Replicator {
     use JSON;
     use File::Basename;
     use LWP::UserAgent;
     use String::Util qw(endswith);
 
+    # Sub: replicate
+    # - Purpose: For each proto and last 31 days, replicate newest files.
+    # - Params: $stats_dir (str) local dir; $partner_node (str) hostname.
+    # - Return: undef (best-effort fetches).
     sub replicate ($stats_dir, $partner_node) {
         say "Replicating from $partner_node";
 
@@ -532,6 +660,10 @@ package Foostats::Replicator {
         }
     }
 
+    # Sub: replicate_file
+    # - Purpose: Download a single URL to a destination unless already present (unless forced).
+    # - Params: $remote_url (str) source; $dest_path (str) destination; $force (bool/int).
+    # - Return: undef; logs failures.
     sub replicate_file ($remote_url, $dest_path, $force) {
 
         # $dest_path already exists, not replicating it
@@ -553,15 +685,24 @@ package Foostats::Replicator {
     }
 }
 
+# Package: Foostats::Merger — merge per-host daily stats into a single view
+# - Purpose: Merge multiple node files per day into totals and unique counts.
 package Foostats::Merger {
-
     # Removed Data::Dumper (debug-only) per review.
+    # Sub: merge
+    # - Purpose: Produce merged stats for the last month (date => stats hashref).
+    # - Params: $stats_dir (str) directory with daily gz JSON files.
+    # - Return: hash (not ref) of date => merged stats.
     sub merge ($stats_dir) {
         my %merge;
         $merge{$_} = merge_for_date($stats_dir, $_) for DateHelper::last_month_dates;
         return %merge;
     }
 
+    # Sub: merge_for_date
+    # - Purpose: Merge all node files for a specific date into one stats hashref.
+    # - Params: $stats_dir (str), $date (YYYYMMDD str/int).
+    # - Return: { feed_ips => {...}, count => {...}, page_ips => {...} }.
     sub merge_for_date ($stats_dir, $date) {
         printf
             "Merging for date %s\n",
@@ -575,6 +716,10 @@ package Foostats::Merger {
         };
     }
 
+    # Sub: merge_ips
+    # - Purpose: Deep-ish merge helper: sums numbers, merges hash-of-hash counts.
+    # - Params: $a (hashref target), $b (hashref source), $key_transform (code|undef).
+    # - Return: undef; updates $a in place; dies on incompatible types.
     sub merge_ips ($a, $b, $key_transform = undef) {
         my sub merge ($a, $b) {
             while (my ($key, $val) = each %$b) {
@@ -614,6 +759,10 @@ package Foostats::Merger {
         }
     }
 
+    # Sub: feed_ips
+    # - Purpose: Merge feed unique-IP sets from per-proto stats into totals.
+    # - Params: @stats (list of stats hashrefs) each with {proto, feed_ips}.
+    # - Return: hashref with Total and per-proto feed counts.
     sub feed_ips (@stats) {
         my (%gemini, %web);
 
@@ -643,6 +792,10 @@ package Foostats::Merger {
         return \%merge;
     }
 
+    # Sub: count
+    # - Purpose: Sum request counters across stats for the day.
+    # - Params: @stats (list of stats hashrefs) each with {count}.
+    # - Return: hashref of summed counters.
     sub count (@stats) {
         my %merge;
 
@@ -656,6 +809,10 @@ package Foostats::Merger {
         return \%merge;
     }
 
+    # Sub: page_ips
+    # - Purpose: Merge unique IPs per host and per URL; coalesce truncated endings.
+    # - Params: @stats (list of stats hashrefs) with {page_ips}{urls,hosts}.
+    # - Return: hashref with urls/hosts each mapping => unique counts.
     sub page_ips (@stats) {
         my %merge = (
             urls  => {},
@@ -680,6 +837,10 @@ package Foostats::Merger {
         return \%merge;
     }
 
+    # Sub: stats_for_date
+    # - Purpose: Load all stats files for a date across protos; tag proto/path.
+    # - Params: $stats_dir (str), $date (YYYYMMDD).
+    # - Return: list of stats hashrefs.
     sub stats_for_date ($stats_dir, $date) {
         my @stats;
 
@@ -699,10 +860,16 @@ package Foostats::Merger {
     }
 }
 
+# Package: Foostats::Reporter — build gemtext/HTML daily and summary reports
+# - Purpose: Render daily reports and rolling summaries (30/365), and index pages.
 package Foostats::Reporter {
     use Time::Piece;
     use HTML::Entities qw(encode_entities);
 
+    # Sub: truncate_url
+    # - Purpose: Middle-ellipsize long URLs to fit within a target length.
+    # - Params: $url (str), $max_length (int default 100).
+    # - Return: possibly truncated string.
     sub truncate_url {
         my ($url, $max_length) = @_;
         $max_length //= 100;    # Default to 100 characters
@@ -724,6 +891,10 @@ package Foostats::Reporter {
         return $start . $ellipsis . $end;
     }
 
+    # Sub: truncate_urls_for_table
+    # - Purpose: Truncate URL cells in-place to fit target table width.
+    # - Params: $url_rows (arrayref of [url,count]), $count_column_header (str).
+    # - Return: undef; mutates $url_rows.
     sub truncate_urls_for_table {
         my ($url_rows, $count_column_header) = @_;
 
@@ -745,6 +916,10 @@ package Foostats::Reporter {
         }
     }
 
+    # Sub: format_table
+    # - Purpose: Render a simple monospace table from headers and rows.
+    # - Params: $headers (arrayref), $rows (arrayref of arrayrefs).
+    # - Return: string with lines separated by \n.
     sub format_table {
         my ($headers, $rows) = @_;
 
@@ -785,6 +960,10 @@ package Foostats::Reporter {
     }
 
     # Convert gemtext to HTML
+    # Sub: gemtext_to_html
+    # - Purpose: Convert a subset of Gemtext to compact HTML, incl. code blocks and lists.
+    # - Params: $content (str) Gemtext.
+    # - Return: HTML string (fragment).
     sub gemtext_to_html {
         my ($content)        = @_;
         my $html             = "";
@@ -888,6 +1067,10 @@ package Foostats::Reporter {
     }
 
     # Check if the lines form an ASCII table
+    # Sub: is_ascii_table
+    # - Purpose: Heuristically detect if a code block is an ASCII table.
+    # - Params: $lines (arrayref of strings).
+    # - Return: 1 if likely table; 0 otherwise.
     sub is_ascii_table {
         my ($lines) = @_;
         return 0 if @$lines < 3;    # Need at least header, separator, and one data row
@@ -900,6 +1083,10 @@ package Foostats::Reporter {
     }
 
     # Convert ASCII table to HTML table
+    # Sub: convert_ascii_table_to_html
+    # - Purpose: Convert simple ASCII table lines to an HTML <table>.
+    # - Params: $lines (arrayref of strings).
+    # - Return: HTML string.
     sub convert_ascii_table_to_html {
         my ($lines)   = @_;
         my $html      = "<table>\n";
@@ -933,6 +1120,10 @@ package Foostats::Reporter {
     }
 
     # Trim whitespace from string
+    # Sub: trim
+    # - Purpose: Strip leading/trailing whitespace.
+    # - Params: $str (str).
+    # - Return: trimmed string.
     sub trim {
         my ($str) = @_;
         $str =~ s/^\s+//;
@@ -941,6 +1132,10 @@ package Foostats::Reporter {
     }
 
     # Build an href for a token that looks like a URL or FQDN
+    # Sub: _guess_href
+    # - Purpose: Infer absolute href for a token (supports gemini for .gmi).
+    # - Params: $token (str) token from text.
+    # - Return: href string or undef.
     sub _guess_href {
         my ($token) = @_;
         my $t = $token;
@@ -973,6 +1168,10 @@ package Foostats::Reporter {
     }
 
     # Turn any URLs/FQDNs in the provided text into anchors
+    # Sub: linkify_text
+    # - Purpose: Replace URL/FQDN tokens in text with HTML anchors.
+    # - Params: $text (str) input text.
+    # - Return: HTML string with entities encoded.
     sub linkify_text {
         my ($text) = @_;
         return '' unless defined $text;
@@ -1011,6 +1210,10 @@ package Foostats::Reporter {
     # Use HTML::Entities::encode_entities imported above
 
     # Generate HTML wrapper
+    # Sub: generate_html_page
+    # - Purpose: Wrap content in a minimal HTML5 page with a title and CSS reset.
+    # - Params: $title (str), $content (str) HTML fragment.
+    # - Return: full HTML page string.
     sub generate_html_page {
         my ($title, $content) = @_;
         return qq{<!DOCTYPE html>
@@ -1078,6 +1281,10 @@ $content
 };
     }
 
+    # Sub: report
+    # - Purpose: Generate daily .gmi and .html reports per date, then summaries and index.
+    # - Params: $stats_dir, $output_dir, $html_output_dir, %merged (date => stats).
+    # - Return: undef.
     sub report {
         my ($stats_dir, $output_dir, $html_output_dir, %merged) = @_;
         for my $date (sort { $b cmp $a } keys %merged) {
@@ -1227,6 +1434,10 @@ $content
         generate_index($output_dir, $html_output_dir);
     }
 
+    # Sub: generate_summary_report
+    # - Purpose: Generate N-day rolling summary in .gmi (+.html except 365-day).
+    # - Params: $days (int), $stats_dir, $output_dir, $html_output_dir, %merged.
+    # - Return: undef.
     sub generate_summary_report {
         my ($days, $stats_dir, $output_dir, $html_output_dir, %merged) = @_;
 
@@ -1275,6 +1486,10 @@ $content
         }
     }
 
+    # Sub: build_report_header
+    # - Purpose: Header section for summary reports.
+    # - Params: $today (Time::Piece), $days (int default 30).
+    # - Return: gemtext string.
     sub build_report_header {
         my ($today, $days) = @_;
         $days //= 30;    # Default to 30 days for backward compatibility
@@ -1284,6 +1499,10 @@ $content
         return $content;
     }
 
+    # Sub: build_daily_summary_section
+    # - Purpose: Table of daily total counts over a period.
+    # - Params: $dates (arrayref YYYYMMDD), $merged (hashref date=>stats).
+    # - Return: gemtext string.
     sub build_daily_summary_section {
         my ($dates, $merged) = @_;
 
@@ -1304,6 +1523,10 @@ $content
         return $content;
     }
 
+    # Sub: build_daily_summary_row
+    # - Purpose: Build one table row with counts for a date.
+    # - Params: $date (YYYYMMDD), $stats (hashref).
+    # - Return: arrayref of cell strings.
     sub build_daily_summary_row {
         my ($date, $stats) = @_;
 
@@ -1321,6 +1544,10 @@ $content
         return [ $formatted_date, $filtered, $gemini, $web, $ipv4, $ipv6, $total_requests ];
     }
 
+    # Sub: build_feed_statistics_section
+    # - Purpose: Table of feed unique counts by day over a period.
+    # - Params: $dates (arrayref), $merged (hashref).
+    # - Return: gemtext string.
     sub build_feed_statistics_section {
         my ($dates, $merged) = @_;
 
@@ -1340,6 +1567,10 @@ $content
         return $content;
     }
 
+    # Sub: build_feed_statistics_row
+    # - Purpose: Build one row of feed unique counts for a date.
+    # - Params: $date (YYYYMMDD), $stats (hashref).
+    # - Return: arrayref of cell strings.
     sub build_feed_statistics_row {
         my ($date, $stats) = @_;
 
@@ -1356,6 +1587,10 @@ $content
         ];
     }
 
+    # Sub: aggregate_hosts_and_urls
+    # - Purpose: Sum hosts and URLs across multiple days.
+    # - Params: $dates (arrayref), $merged (hashref).
+    # - Return: (\%all_hosts, \%all_urls).
     sub aggregate_hosts_and_urls {
         my ($dates, $merged) = @_;
 
@@ -1382,6 +1617,10 @@ $content
         return (\%all_hosts, \%all_urls);
     }
 
+    # Sub: build_top_hosts_section
+    # - Purpose: Build Top-50 hosts table for the aggregated period.
+    # - Params: $all_hosts (hashref), $days (int default 30).
+    # - Return: gemtext string.
     sub build_top_hosts_section {
         my ($all_hosts, $days) = @_;
         $days //= 30;
@@ -1403,6 +1642,10 @@ $content
         return $content;
     }
 
+    # Sub: build_top_urls_section
+    # - Purpose: Build Top-50 URLs table for the aggregated period (with truncation).
+    # - Params: $all_urls (hashref), $days (int default 30).
+    # - Return: gemtext string.
     sub build_top_urls_section {
         my ($all_urls, $days) = @_;
         $days //= 30;
@@ -1427,6 +1670,10 @@ $content
         return $content;
     }
 
+    # Sub: build_summary_links
+    # - Purpose: Links to other summary reports (30-day when not already on it).
+    # - Params: $current_days (int), $report_date (YYYYMMDD).
+    # - Return: gemtext string.
     sub build_summary_links {
         my ($current_days, $report_date) = @_;
 
@@ -1441,6 +1688,10 @@ $content
         return $content;
     }
 
+    # Sub: build_top3_urls_last_n_days_per_day
+    # - Purpose: For each of last N days, render the top URLs table.
+    # - Params: $stats_dir (str), $days (int default 30), $merged (hashref).
+    # - Return: gemtext string.
     sub build_top3_urls_last_n_days_per_day {
         my ($stats_dir, $days, $merged) = @_;
         $days //= 30;
@@ -1478,6 +1729,10 @@ $content
         return $content;
     }
 
+    # Sub: generate_index
+    # - Purpose: Create index.gmi/.html using the latest 30-day summary as content.
+    # - Params: $output_dir (str), $html_output_dir (str).
+    # - Return: undef.
     sub generate_index {
         my ($output_dir, $html_output_dir) = @_;
 
@@ -1538,9 +1793,15 @@ $content
 }
 
 package main;
+# Package: main — CLI entrypoint and orchestration
+# - Purpose: Parse options and invoke parse/replicate/report flows.
 use Getopt::Long;
 use Sys::Hostname;
 
+# Sub: usage
+# - Purpose: Print usage and exit 0.
+# - Params: none.
+# - Return: never (exits).
 sub usage {
     print <<~"USAGE";
         Usage: $0 [options]
@@ -1568,6 +1829,10 @@ sub usage {
     exit 0;
 }
 
+# Sub: parse_logs
+# - Purpose: Parse logs and persist aggregated stats files under $stats_dir.
+# - Params: $stats_dir (str), $odds_file (str), $odds_log (str).
+# - Return: undef.
 sub parse_logs ($stats_dir, $odds_file, $odds_log) {
     my $out = Foostats::FileOutputter->new(stats_dir => $stats_dir);
 
@@ -1580,6 +1845,10 @@ sub parse_logs ($stats_dir, $odds_file, $odds_log) {
     $out->write;
 }
 
+# Sub: foostats_main
+# - Purpose: Option parsing and execution of requested actions.
+# - Params: none (reads @ARGV).
+# - Return: exit code via program termination.
 sub foostats_main {
     my ($parse_logs, $replicate, $report, $all, $help, $version);
 
