@@ -805,12 +805,10 @@ package Foostats::Merger {
             merge_ips(
                 $merge{$key},
                 $_->{page_ips}->{$key},
-                sub ($key) {
-                    $key =~ s/\.html$/.../;
-                    $key =~ s/\.gmi$/.../;
-                    $key;
-                }
-            ) for @stats;
+                            sub ($key) {
+                                $key =~ s/\.gmi$/\.html/;
+                                $key;
+                            }            ) for @stats;
 
             # Keep only uniq IP count
             $merge{$key}->{$_} = scalar keys $merge{$key}->{$_}->%* for keys $merge{$key}->%*;
@@ -983,10 +981,7 @@ package Foostats::Reporter {
                 next;
             }
 
-            # Skip 365-day summary section header in HTML output
-            if ($line =~ /^## 365-Day Summary Reports\s*$/) {
-                next;
-            }
+            
 
             # Check if we need to close a list
             if ($in_list && $line !~ /^\* /) {
@@ -1136,7 +1131,7 @@ package Foostats::Reporter {
             my ($host, $path) = ($1, $2 // '');
             my $has_ellipsis = index($t, '...') != -1 || index(($path // ''), '...') != -1;
             my $is_gemini    = defined($path) && $path =~ /\.gmi(?:[?#].*)?$/i;
-            my $scheme       = $is_gemini ? 'gemini' : 'https';
+            my $scheme       = 'https';
 
             # If truncated, fall back to host root
             my $href =
@@ -1174,7 +1169,8 @@ package Foostats::Reporter {
 
             my $href = _guess_href($core);
             if ($href) {
-                $out .= sprintf('<a href="%s.html">%s</a>%s',
+                $href =~ s/\.gmi$/\.html/i;
+                $out .= sprintf('<a href="%s">%s</a>%s',
                     encode_entities($href), encode_entities($core), encode_entities($trail));
             }
             else {
@@ -1703,7 +1699,10 @@ $content
             @sorted = @sorted[ 0 .. $limit - 1 ];
 
             my @rows;
-            for my $u (@sorted) { push @rows, [ $u, $urls->{$u} // 0 ]; }
+            for my $u (@sorted) {
+                $u =~ s/\.gmi$/\.html/;
+                push @rows, [ $u, $urls->{$u} // 0 ];
+            }
             truncate_urls_for_table(\@rows, 'Visitors');
             $content .= "```\n" . format_table([ 'URL', 'Visitors' ], \@rows) . "\n```\n\n";
         }
