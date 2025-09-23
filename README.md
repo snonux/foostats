@@ -57,19 +57,24 @@ doas perl foostats.pl --all
 ### Command-Line Options
 
 ```
---parse-logs              Parse web and gemini logs
---replicate               Replicate stats from partner node
---report                  Generate a report from the stats
---all                     Perform all of the above actions
---stats-dir <path>        Directory to store stats files
+--parse-logs              Parse web and gemini logs.
+--replicate               Replicate stats from partner node.
+--report                  Generate a report from the stats.
+--all                     Perform all of the above actions (parse, replicate, report).
+--stats-dir <path>        Directory to store stats files.
                           Default: /var/www/htdocs/buetow.org/self/foostats
---odds-file <path>        File with odd URI patterns to filter
+--output-dir <path>       Directory to write .gmi report files.
+                          Default: /var/gemini/stats.foo.zone
+--html-output-dir <path>  Directory to write .html report files.
+                          Default: /var/www/htdocs/gemtexter/stats.foo.zone
+--odds-file <path>        File with odd URI patterns to filter.
                           Default: <stats-dir>/fooodds.txt
---filter-log <path>       Log file for filtered requests
+--filter-log <path>       Log file for filtered requests.
                           Default: /var/log/fooodds
---partner-node <hostname> Hostname of the partner node for replication
+--partner-node <hostname> Hostname of the partner node for replication.
                           Default: fishfinger.buetow.org or blowfish.buetow.org
---help                    Show help message
+--version                 Show version information.
+--help                    Show this help message.
 ```
 
 ## Configuration
@@ -115,18 +120,18 @@ Compressed JSON statistics stored in the stats directory:
 
 ### Reports
 
-Gemtext reports generated in `stats/gemtext/`:
-- Daily reports: `YYYY-MM-DD.gmi`
-- Monthly reports: `YYYY-MM.gmi`
-- 30-day summary: `30-day-summary.gmi`
-- Yearly reports: `YYYY.gmi`
+By default, reports are generated for a production environment:
+- Gemtext reports: `/var/gemini/stats.foo.zone` (configurable with `--output-dir`)
+- HTML reports: `/var/www/htdocs/gemtexter/stats.foo.zone` (configurable with `--html-output-dir`)
 
-Reports include:
-- Total requests and unique visitors
-- Protocol breakdown (HTTP vs Gemini, IPv4 vs IPv6)
-- Top hosts and URLs by unique visitors
-- Feed subscriber counts
-- Filtered/suspicious request statistics
+For local development, the `Justfile` provides a `reports` command that generates output in local directories:
+- Gemtext reports: `out_gmi/`
+- HTML reports: `out_html/`
+
+Generated reports include:
+- Daily reports: `YYYYMMDD.gmi` / `.html`
+- 30-day summary: `30day_summary_YYYYMMDD.gmi` / `.html`
+- An `index.gmi` and `index.html` that displays the latest 30-day summary.
 
 ## Privacy Considerations
 
@@ -146,12 +151,13 @@ Basic test suite using Test::More is included under `t/`.
 - Run all tests: `prove -lr t`
 - The script now avoids running its CLI when loaded via `require`, enabling unit testing of internal packages.
 
-## Development
+## Justfile Usage
 
-- Format: `just format` (uses `.perltidyrc`, requires `perltidy`)
-- Test: `just test` (uses `prove` if available, otherwise runs tests via `perl`)
-- Lint/syntax: `just check`
-- Cleanup: `just clean`
-- Generate reports (from repo's `stats/`): `just reports`
+The project includes a `Justfile` for common development tasks. Install `just` for a convenient command runner.
 
-Tip: install `just` (a command runner) for convenience.
+- `just format`: Formats Perl code with `perltidy` using the project's `.perltidyrc` configuration.
+- `just test`: Runs the test suite. It uses `prove -lr t` if available, otherwise falls back to running each test file with `perl`.
+- `just check`: Performs a syntax check of `foostats.pl`.
+- `just clean`: Removes temporary backup files (`.bak`, `*~`, etc.).
+- `just reports`: Generates reports from the sample data in the `stats/` directory into local `out_gmi/` and `out_html/` directories.
+- `just gather-fooodds`: Gathers suspicious request logs from remote servers, sorts them, and saves them to `fooodds.log`. This is useful for identifying new patterns to add to `fooodds.txt`.
