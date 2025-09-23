@@ -28,14 +28,10 @@ package FileHelper {
     # - Params: $path (str) destination; $content (str) contents to write.
     # - Return: undef; dies on failure.
     sub write ($path, $content) {
-        open my $fh, '>', "$path.tmp"
-            or die "\nCannot open file: $!";
+        open my $fh, '>', "$path.tmp" or die "\nCannot open file: $!";
         print $fh $content;
         close $fh;
-
-        rename
-            "$path.tmp",
-            $path;
+        rename "$path.tmp", $path;
     }
 
     # Sub: write_json_gz
@@ -46,13 +42,11 @@ package FileHelper {
         my $json = encode_json $data;
 
         say "Writing $path";
-        open my $fd, '>:gzip', "$path.tmp"
-            or die "$path.tmp: $!";
+        open my $fd, '>:gzip', "$path.tmp" or die "$path.tmp: $!";
         print $fd $json;
         close $fd;
 
-        rename "$path.tmp", $path
-            or die "$path.tmp: $!";
+        rename "$path.tmp", $path or die "$path.tmp: $!";
     }
 
     # Sub: read_json_gz
@@ -61,8 +55,7 @@ package FileHelper {
     # - Return: Perl data structure.
     sub read_json_gz ($path) {
         say "Reading $path";
-        open my $fd, '<:gzip', $path
-            or die "$path: $!";
+        open my $fd, '<:gzip', $path or die "$path: $!";
         my $json = decode_json <$fd>;
         close $fd;
         return $json;
@@ -74,8 +67,7 @@ package FileHelper {
     # - Return: list of lines (no trailing newlines).
     sub read_lines ($path) {
         my @lines;
-        open(my $fh, '<', $path)
-            or die "$path: $!";
+        open(my $fh, '<', $path) or die "$path: $!";
         chomp(@lines = <$fh>);
         close($fh);
         return @lines;
@@ -98,9 +90,7 @@ package DateHelper {
 
         for my $days_ago (1 .. 31) {
             my $date = $today - ($days_ago * 24 * 60 * 60);
-            push
-                @dates,
-                $date->strftime('%Y%m%d');
+            push @dates, $date->strftime('%Y%m%d');
         }
 
         return @dates;
@@ -134,11 +124,8 @@ package Foostats::Logreader {
     # - Params: $ip (str) source IP.
     # - Return: ($hash, $proto) where $proto is 'IPv4' or 'IPv6'.
     sub anonymize_ip ($ip) {
-        my $ip_proto =
-            contains($ip, ':')
-            ? 'IPv6'
-            : 'IPv4';
-        my $ip_hash = sha3_512_base64 $ip;
+        my $ip_proto = contains($ip, ':') ? 'IPv6' : 'IPv4';
+        my $ip_hash  = sha3_512_base64 $ip;
         return ($ip_hash, $ip_proto);
     }
 
@@ -152,17 +139,12 @@ package Foostats::Logreader {
         }
 
         my sub open_file ($path) {
-            my $flag =
-                $path =~ /\.gz$/
-                ? '<:gzip'
-                : '<';
-            open my $fd, $flag, $path
-                or die "$path: $!";
+            my $flag = $path =~ /\.gz$/ ? '<:gzip' : '<';
+            open my $fd, $flag, $path or die "$path: $!";
             return $fd;
         }
 
         my $last = false;
-
         say 'File path glob matches: ' . join(' ', glob $glob);
 
     LAST:
@@ -173,18 +155,15 @@ package Foostats::Logreader {
             my $year = year $file;
 
             while (<$file>) {
-                next
-                    if contains($_, 'logfile turned over');
+                next if contains($_, 'logfile turned over');
 
                 # last == true means: After this file, don't process more
-                $last = true
-                    unless defined $cb->($year, split / +/);
+                $last = true unless defined $cb->($year, split / +/);
             }
 
             say "Closing $path (last:$last)";
             close $file;
-            last LAST
-                if $last;
+            last LAST if $last;
         }
     }
 
@@ -200,14 +179,10 @@ package Foostats::Logreader {
 
         my sub parse_web_line (@line) {
             my ($date, $time) = parse_date $line [4];
-            return undef
-                if $date < $last_processed_date;
+            return undef if $date < $last_processed_date;
 
             # X-Forwarded-For?
-            my $ip =
-                  $line[-2] eq '-'
-                ? $line[1]
-                : $line[-2];
+            my $ip = $line[-2] eq '-' ? $line[1] : $line[-2];
             my ($ip_hash, $ip_proto) = anonymize_ip $ip;
 
             return {
@@ -240,12 +215,8 @@ package Foostats::Logreader {
         my sub parse_vger_line ($year, @line) {
             my $full_path = $line[5];
             $full_path =~ s/"//g;
-            my ($proto, undef, $host, $uri_path) =
-                split '/',
-                $full_path,
-                4;
-            $uri_path = ''
-                unless defined $uri_path;
+            my ($proto, undef, $host, $uri_path) = split '/', $full_path, 4;
+            $uri_path = '' unless defined $uri_path;
 
             return {
                 proto    => 'gemini',
@@ -276,18 +247,13 @@ package Foostats::Logreader {
             if ($line[4] eq 'vger:') {
                 $vger = parse_vger_line $year, @line;
             }
-            elsif ($line[5] eq 'relay'
-                and startswith($line[6], 'gemini'))
-            {
+            elsif ($line[5] eq 'relay' and startswith($line[6], 'gemini')) {
                 $relayd = parse_relayd_line $year, @line;
                 return undef
                     if $relayd->{date} < $last_processed_date;
             }
 
-            if (    defined $vger
-                and defined $relayd
-                and $vger->{time} eq $relayd->{time})
-            {
+            if (defined $vger and defined $relayd and $vger->{time} eq $relayd->{time}) {
                 $cb->({ %$vger, %$relayd });
                 $vger = $relayd = undef;
             }
@@ -330,12 +296,7 @@ package Foostats::Filter {
     sub new ($class, $odds_file, $log_path) {
         say "Logging filter to $log_path";
         my @odds = FileHelper::read_lines($odds_file);
-
-        bless {
-            odds     => \@odds,
-            log_path => $log_path
-            },
-            $class;
+        bless { odds => \@odds, log_path => $log_path }, $class;
     }
 
     # Sub: ok
@@ -344,12 +305,9 @@ package Foostats::Filter {
     # - Return: true if allowed; false if blocked.
     sub ok ($self, $event) {
         state %blocked = ();
-        return false
-            if exists $blocked{ $event->{ip_hash} };
+        return false if exists $blocked{ $event->{ip_hash} };
 
-        if (   $self->odd($event)
-            or $self->excessive($event))
-        {
+        if ($self->odd($event) or $self->excessive($event)) {
             ($blocked{ $event->{ip_hash} } //= 0)++;
             return false;
         }
@@ -367,9 +325,7 @@ package Foostats::Filter {
 
         for ($self->{odds}->@*) {
             next if !defined $_ || $_ eq '' || /^\s*#/;
-            next
-                unless contains($uri_path, $_);
-
+            next unless contains($uri_path, $_);
             $self->log('WARN', $uri_path, "contains $_ and is odd and will therefore be blocked!");
             return true;
         }
@@ -386,12 +342,10 @@ package Foostats::Filter {
         state %dedup;
 
         # Don't log if path was already logged
-        return
-            if exists $dedup{$subject};
+        return if exists $dedup{$subject};
         $dedup{$subject} = 1;
 
-        open(my $fh, '>>', $self->{log_path})
-            or die $self->{log_path} . ": $!";
+        open(my $fh, '>>', $self->{log_path}) or die $self->{log_path} . ": $!";
         print $fh "$severity: $subject $message\n";
         close($fh);
     }
@@ -439,11 +393,7 @@ package Foostats::Aggregator {
     # - Params: $odds_file (str), $odds_log (str).
     # - Return: Foostats::Aggregator instance.
     sub new ($class, $odds_file, $odds_log) {
-        bless {
-            filter => Foostats::Filter->new($odds_file, $odds_log),
-            stats  => {}
-            },
-            $class;
+        bless { filter => Foostats::Filter->new($odds_file, $odds_log), stats => {} }, $class;
     }
 
     # Sub: add
@@ -451,8 +401,7 @@ package Foostats::Aggregator {
     # - Params: $event (hashref) normalized event; ignored if undef.
     # - Return: $event; filtered events increment filtered count only.
     sub add ($self, $event) {
-        return undef
-            unless defined $event;
+        return undef unless defined $event;
 
         my $date     = $event->{date};
         my $date_key = $event->{proto} . "_$date";
@@ -480,9 +429,7 @@ package Foostats::Aggregator {
         }
 
         $self->add_count($s, $event);
-        $self->add_page_ips($s, $event)
-            unless $self->add_feed_ips($s, $event);
-
+        $self->add_page_ips($s, $event) unless $self->add_feed_ips($s, $event);
         return $event;
     }
 
@@ -529,13 +476,10 @@ package Foostats::Aggregator {
         \my $e = \$event;
         \my $p = \$stats->{page_ips};
 
-        return
-            if !endswith($e->{uri_path}, '.html')
-            && !endswith($e->{uri_path}, '.gmi');
+        return if !endswith($e->{uri_path}, '.html') && !endswith($e->{uri_path}, '.gmi');
 
         ($p->{hosts}->{ $e->{host} }->{ $e->{ip_hash} } //= 0)++;
-        ($p->{urls}->{ $e->{host} . $e->{uri_path} }->{ $e->{ip_hash} } //=
-                0)++;
+        ($p->{urls}->{ $e->{host} . $e->{uri_path} }->{ $e->{ip_hash} } //= 0)++;
     }
 }
 
@@ -552,10 +496,7 @@ package Foostats::FileOutputter {
     # - Return: Foostats::FileOutputter instance.
     sub new ($class, %args) {
         my $self = bless \%args, $class;
-        mkdir $self->{stats_dir}
-            or die $self->{stats_dir} . ": $!"
-            unless -d $self->{stats_dir};
-
+        mkdir $self->{stats_dir} or die $self->{stats_dir} . ": $!" unless -d $self->{stats_dir};
         return $self;
     }
 
@@ -566,11 +507,7 @@ package Foostats::FileOutputter {
     sub last_processed_date ($self, $proto) {
         my $hostname  = hostname();
         my @processed = glob $self->{stats_dir} . "/${proto}_????????.$hostname.json.gz";
-        my ($date) =
-            @processed
-            ? ($processed[-1] =~ /_(\d{8})\.$hostname\.json.gz/)
-            : 0;
-
+        my ($date)    = @processed ? ($processed[-1] =~ /_(\d{8})\.$hostname\.json.gz/) : 0;
         return int($date);
     }
 
@@ -583,9 +520,7 @@ package Foostats::FileOutputter {
             sub ($self, $date_key, $stats) {
                 my $hostname = hostname();
                 my $path     = $self->{stats_dir} . "/${date_key}.$hostname.json.gz";
-                FileHelper::write_json_gz
-                    $path,
-                    $stats;
+                FileHelper::write_json_gz $path, $stats;
             }
         );
     }
@@ -595,8 +530,7 @@ package Foostats::FileOutputter {
     # - Params: $cb (code) receives ($self, $date_key, $stats).
     # - Return: undef.
     sub for_dates ($self, $cb) {
-        $cb->($self, $_, $self->{stats}{$_}) for sort
-            keys $self->{stats}->%*;
+        $cb->($self, $_, $self->{stats}{$_}) for sort keys $self->{stats}->%*;
     }
 }
 
@@ -625,10 +559,7 @@ package Foostats::Replicator {
                 replicate_file(
                     "https://$partner_node/foostats/$dest_path",
                     "$stats_dir/$dest_path",
-                    $count++
-                        <
-                        3
-                    ,    # Always replicate the newest 3 files.
+                    $count++ < 3,    # Always replicate the newest 3 files.
                 );
             }
         }
@@ -641,9 +572,7 @@ package Foostats::Replicator {
     sub replicate_file ($remote_url, $dest_path, $force) {
 
         # $dest_path already exists, not replicating it
-        return
-            if !$force
-            && -f $dest_path;
+        return if !$force && -f $dest_path;
 
         say "Replicating $remote_url to $dest_path (force:$force)... ";
         my $response = LWP::UserAgent->new->get($remote_url);
@@ -652,9 +581,7 @@ package Foostats::Replicator {
             return;
         }
 
-        FileHelper::write
-            $dest_path,
-            $response->decoded_content;
+        FileHelper::write $dest_path, $response->decoded_content;
         say 'done';
     }
 }
@@ -663,7 +590,6 @@ package Foostats::Replicator {
 # - Purpose: Merge multiple node files per day into totals and unique counts.
 package Foostats::Merger {
 
-    # Removed Data::Dumper (debug-only) per review.
     # Sub: merge
     # - Purpose: Produce merged stats for the last month (date => stats hashref).
     # - Params: $stats_dir (str) directory with daily gz JSON files.
@@ -679,10 +605,7 @@ package Foostats::Merger {
     # - Params: $stats_dir (str), $date (YYYYMMDD str/int).
     # - Return: { feed_ips => {...}, count => {...}, page_ips => {...} }.
     sub merge_for_date ($stats_dir, $date) {
-        printf
-            "Merging for date %s\n",
-            $date;
-
+        printf "Merging for date %s\n", $date;
         my @stats = stats_for_date($stats_dir, $date);
         return {
             feed_ips => feed_ips(@stats),
@@ -706,25 +629,19 @@ package Foostats::Merger {
         my $is_num = qr/^\d+(\.\d+)?$/;
 
         while (my ($key, $val) = each %$b) {
-            $key = $key_transform->($key)
-                if defined $key_transform;
+            $key = $key_transform->($key) if defined $key_transform;
 
             if (not exists $a->{$key}) {
                 $a->{$key} = $val;
             }
-            elsif (ref($a->{$key}) eq 'HASH'
-                && ref($val) eq 'HASH')
-            {
+            elsif (ref($a->{$key}) eq 'HASH' && ref($val) eq 'HASH') {
                 merge($a->{$key}, $val);
             }
-            elsif ($a->{$key} =~ $is_num
-                && $val =~ $is_num)
-            {
+            elsif ($a->{$key} =~ $is_num && $val =~ $is_num) {
                 $a->{$key} += $val;
             }
             else {
-                die
-                    "Not merging tkey '%s' (ref:%s): '%s' (ref:%s) with '%s' (ref:%s)\n",
+                die "Not merging tkey '%s' (ref:%s): '%s' (ref:%s) with '%s' (ref:%s)\n",
                     $key,
                     ref($key), $a->{$key},
                     ref($a->{$key}),
@@ -742,13 +659,8 @@ package Foostats::Merger {
         my (%gemini, %web);
 
         for my $stats (@stats) {
-            my $merge =
-                $stats->{proto} eq 'web'
-                ? \%web
-                : \%gemini;
-            printf
-                "Merging proto %s feed IPs\n",
-                $stats->{proto};
+            my $merge = $stats->{proto} eq 'web' ? \%web : \%gemini;
+            printf "Merging proto %s feed IPs\n", $stats->{proto};
             merge_ips($merge, $stats->{feed_ips});
         }
 
@@ -820,12 +732,8 @@ package Foostats::Merger {
 
         for my $proto (qw(gemini web)) {
             for my $path (<$stats_dir/${proto}_${date}.*.json.gz>) {
-                printf
-                    "Reading %s\n",
-                    $path;
-                push
-                    @stats,
-                    FileHelper::read_json_gz($path);
+                printf "Reading %s\n", $path;
+                push @stats, FileHelper::read_json_gz($path);
                 @{ $stats[-1] }{qw(proto path)} = ($proto, $path);
             }
         }
@@ -847,7 +755,6 @@ package Foostats::Reporter {
     sub truncate_url {
         my ($url, $max_length) = @_;
         $max_length //= 100;    # Default to 100 characters
-
         return $url if length($url) <= $max_length;
 
         # Calculate how many characters we need to remove
@@ -910,8 +817,7 @@ package Foostats::Reporter {
         my $header_line    = '|';
         my $separator_line = '|';
         for my $col (0 .. $#{$headers}) {
-            $header_line .=
-                sprintf(" %-*s |", $widths[$col], $headers->[$col]);
+            $header_line    .= sprintf(" %-*s |", $widths[$col], $headers->[$col]);
             $separator_line .= '-' x ($widths[$col] + 2) . '|';
         }
 
@@ -949,7 +855,7 @@ package Foostats::Reporter {
 
             if ($line =~ /^```/) {
                 my @block_lines;
-                $i++; # Move past the opening ```
+                $i++;    # Move past the opening ```
                 while ($i < @lines && $lines[$i] !~ /^```/) {
                     push @block_lines, $lines[$i];
                     $i++;
@@ -975,11 +881,12 @@ package Foostats::Reporter {
                     $i++;
                 }
                 $html .= _gemtext_to_html_list(\@list_items);
-                $i--; # Decrement to re-evaluate the current line in the outer loop
+                $i--;    # Decrement to re-evaluate the current line in the outer loop
             }
             elsif ($line !~ /^\s*$/) {
                 $html .= _gemtext_to_html_paragraph($line);
             }
+
             # Else, it's a blank line, which we skip for compact output.
             $i++;
         }
@@ -1070,9 +977,9 @@ package Foostats::Reporter {
     # - Params: $lines (arrayref of strings).
     # - Return: HTML string.
     sub convert_ascii_table_to_html {
-        my ($lines)   = @_;
-        my $html      = "<table>\n";
-        my $row_count = 0;
+        my ($lines)       = @_;
+        my $html          = "<table>\n";
+        my $row_count     = 0;
         my $total_col_idx = -1;
 
         for my $line (@$lines) {
@@ -1088,7 +995,7 @@ package Foostats::Reporter {
                 my $is_total_row = (trim($cells[0]) eq 'Total');
                 $html .= "<tr>\n";
 
-                if ($row_count == 0) { # Header row
+                if ($row_count == 0) {                  # Header row
                     for my $i (0 .. $#cells) {
                         if (trim($cells[$i]) eq 'Total') {
                             $total_col_idx = $i;
@@ -1099,12 +1006,13 @@ package Foostats::Reporter {
 
                 my $tag = ($row_count == 0) ? "th" : "td";
                 for my $i (0 .. $#cells) {
-                    my $val = trim($cells[$i]);
+                    my $val          = trim($cells[$i]);
                     my $cell_content = linkify_text($val);
 
                     if ($is_total_row || ($i == $total_col_idx && $row_count > 0)) {
                         $html .= "  <$tag><b>" . $cell_content . "</b></$tag>\n";
-                    } else {
+                    }
+                    else {
                         $html .= "  <$tag>" . $cell_content . "</$tag>\n";
                     }
                 }
@@ -1338,12 +1246,12 @@ $content
     }
 
     sub generate_top_n_table {
-        my (%args) = @_;
-        my $title = $args{title};
-        my $data = $args{data};
+        my (%args)  = @_;
+        my $title   = $args{title};
+        my $data    = $args{data};
         my $headers = $args{headers};
-        my $limit = $args{limit} // 50;
-        my $is_url = $args{is_url} // 0;
+        my $limit   = $args{limit}  // 50;
+        my $is_url  = $args{is_url} // 0;
 
         my $report_content = "### $title\n\n";
         my @rows;
@@ -1542,7 +1450,8 @@ $content
             if ($key eq 'Total') {
                 $total_avg = sprintf("%.2f", $totals{$key} / $days_with_stats);
                 $has_total = 1;
-            } else {
+            }
+            else {
                 push @other_keys, $key;
             }
         }
@@ -1555,7 +1464,6 @@ $content
 
         # Add Total row at the end
         push @avg_rows, [ 'Total', $total_avg ] if $has_total;
-
 
         my $content = "### Feed Statistics Daily Average (Last 30 Days)\n\n```\n";
         $content .= format_table([ 'Feed Type', 'Daily Average' ], \@avg_rows);
@@ -1611,13 +1519,12 @@ $content
         my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
         my $formatted_date = "$year-$month-$day";
 
-        my $total_requests =
-            ($stats->{count}{gemini} // 0) + ($stats->{count}{web} // 0);
-        my $filtered = $stats->{count}{filtered} // 0;
-        my $gemini   = $stats->{count}{gemini}   // 0;
-        my $web      = $stats->{count}{web}      // 0;
-        my $ipv4     = $stats->{count}{IPv4}     // 0;
-        my $ipv6     = $stats->{count}{IPv6}     // 0;
+        my $total_requests = ($stats->{count}{gemini} // 0) + ($stats->{count}{web} // 0);
+        my $filtered       = $stats->{count}{filtered} // 0;
+        my $gemini         = $stats->{count}{gemini}   // 0;
+        my $web            = $stats->{count}{web}      // 0;
+        my $ipv4           = $stats->{count}{IPv4}     // 0;
+        my $ipv6           = $stats->{count}{IPv6}     // 0;
 
         return [ $formatted_date, $filtered, $gemini, $web, $ipv4, $ipv6, $total_requests ];
     }
@@ -1940,13 +1847,8 @@ sub foostats_main {
 
     usage() if $help;
 
-    parse_logs($stats_dir, $odds_file, $odds_log)
-        if $parse_logs
-        or $all;
-
-    Foostats::Replicator::replicate($stats_dir, $partner_node)
-        if $replicate
-        or $all;
+    parse_logs($stats_dir, $odds_file, $odds_log)              if $parse_logs or $all;
+    Foostats::Replicator::replicate($stats_dir, $partner_node) if $replicate  or $all;
 
     # Set default output directories if not specified
     $output_dir      //= '/var/gemini/stats.foo.zone';
