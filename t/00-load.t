@@ -6,4 +6,3 @@ use Test::More;
 ok( do './foostats.pl', 'loaded foostats.pl' );
 
 done_testing;
-
