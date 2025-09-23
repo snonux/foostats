@@ -9,7 +9,7 @@ test:
     if command -v prove >/dev/null 2>&1; then \
       prove -lr t; \
     else \
-      for f in t/*.t; do echo "== $$f =="; PERL5LIB=. perl "$$f" || exit 1; done; \
+      for f in t/*.t; do echo "== $f =="; PERL5LIB=. perl "$f" || exit 1; done; \
     fi
 
 # Syntax check

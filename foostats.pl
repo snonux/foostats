@@ -96,7 +96,7 @@ package DateHelper {
         my $today = localtime;
         my @dates;
 
-        for my $days_ago (0 .. 30) {
+        for my $days_ago (1 .. 31) {
             my $date = $today - ($days_ago * 24 * 60 * 60);
             push
                 @dates,
@@ -1465,6 +1465,7 @@ $content
 
         # Order: feed counts -> Top URLs -> daily top 3 for last 30 days -> other tables
         $report_content .= build_feed_statistics_section(\@dates, \%merged);
+        $report_content .= build_feed_statistics_daily_average_section(\@dates, \%merged);
 
         # Aggregate and add top lists
         my ($all_hosts, $all_urls) = aggregate_hosts_and_urls(\@dates, \%merged);
@@ -1495,6 +1496,37 @@ $content
         else {
             say "Skipping HTML generation for 365-day summary (Gemtext only)";
         }
+    }
+
+    sub build_feed_statistics_daily_average_section {
+        my ($dates, $merged) = @_;
+
+        my %totals;
+        my $days_with_stats = 0;
+
+        for my $date (@$dates) {
+            my $stats = $merged->{$date};
+            next unless $stats->{feed_ips};
+            $days_with_stats++;
+
+            for my $key (keys %{ $stats->{feed_ips} }) {
+                $totals{$key} += $stats->{feed_ips}{$key};
+            }
+        }
+
+        return "" unless $days_with_stats > 0;
+
+        my @avg_rows;
+        for my $key (sort keys %totals) {
+            my $avg = sprintf("%.2f", $totals{$key} / $days_with_stats);
+            push @avg_rows, [ $key, $avg ];
+        }
+
+        my $content = "### Feed Statistics Daily Average (Last 30 Days)\n\n```\n";
+        $content .= format_table([ 'Feed Type', 'Daily Average' ], \@avg_rows);
+        $content .= "\n```\n\n";
+
+        return $content;
     }
 
     # Sub: build_report_header
