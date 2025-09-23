@@ -17,13 +17,6 @@ no warnings qw(experimental::refaliasing);
 
 use constant VERSION => 'v0.1.0';
 
-# TODO: Blog post about this script and the new Perl features used.
-# TODO NEXT:
-# * Write out a nice output from each merged file, also merge if multiple hosts results
-# * Fix bug with .gmi.*.gmi in the log parser
-# * Nicely formatted .txt output by stats by count by date
-# * Print out all UAs, to add new excludes/blocked IPs
-
 # Package: FileHelper — small file/JSON helpers
 # - Purpose: Atomic writes, gzip JSON read/write, and line reading.
 # - Notes: Dies on I/O errors; JSON encoding uses core JSON.
@@ -113,7 +106,6 @@ package DateHelper {
         return @dates;
     }
 
-    
 }
 
 # Package: Foostats::Logreader — parse and normalize logs
@@ -131,10 +123,11 @@ package Foostats::Logreader {
     # - Purpose: Glob for gemini-related logs; env override for testing.
     # - Return: glob pattern string.
     sub gemini_logs_glob { $ENV{FOOSTATS_GEMINI_LOGS_GLOB} // '/var/log/daemon*' }
+
     # Sub: web_logs_glob
     # - Purpose: Glob for web access logs; env override for testing.
     # - Return: glob pattern string.
-    sub web_logs_glob    { $ENV{FOOSTATS_WEB_LOGS_GLOB}    // '/var/www/logs/access.log*' }
+    sub web_logs_glob { $ENV{FOOSTATS_WEB_LOGS_GLOB} // '/var/www/logs/access.log*' }
 
     # Sub: anonymize_ip
     # - Purpose: Classify IPv4/IPv6 and map IP to a stable SHA3-512 base64 hash.
@@ -324,7 +317,6 @@ package Foostats::Logreader {
     }
 }
 
-# TODO: Write filter summary at the end of the filter log.
 # Package: Foostats::Filter — request filtering and logging
 # - Purpose: Identify odd URI patterns and excessive requests per second per IP.
 # - Notes: Maintains an in-process blocklist for the current run.
@@ -670,6 +662,7 @@ package Foostats::Replicator {
 # Package: Foostats::Merger — merge per-host daily stats into a single view
 # - Purpose: Merge multiple node files per day into totals and unique counts.
 package Foostats::Merger {
+
     # Removed Data::Dumper (debug-only) per review.
     # Sub: merge
     # - Purpose: Produce merged stats for the last month (date => stats hashref).
@@ -805,10 +798,11 @@ package Foostats::Merger {
             merge_ips(
                 $merge{$key},
                 $_->{page_ips}->{$key},
-                            sub ($key) {
-                                $key =~ s/\.gmi$/\.html/;
-                                $key;
-                            }            ) for @stats;
+                sub ($key) {
+                    $key =~ s/\.gmi$/\.html/;
+                    $key;
+                }
+            ) for @stats;
 
             # Keep only uniq IP count
             $merge{$key}->{$_} = scalar keys $merge{$key}->{$_}->%* for keys $merge{$key}->%*;
@@ -945,102 +939,113 @@ package Foostats::Reporter {
     # - Params: $content (str) Gemtext.
     # - Return: HTML string (fragment).
     sub gemtext_to_html {
-        my ($content)        = @_;
-        my $html             = "";
-        my $in_code_block    = 0;
-        my $in_list          = 0;
-        my @lines            = split /\n/, $content;
-        my @code_block_lines = ();
+        my ($content) = @_;
+        my $html      = "";
+        my @lines     = split /\n/, $content;
+        my $i         = 0;
 
-        for my $line (@lines) {
+        while ($i < @lines) {
+            my $line = $lines[$i];
+
             if ($line =~ /^```/) {
-                if ($in_code_block) {
-
-                    # End code block - check if it's a table
-                    if (is_ascii_table(\@code_block_lines)) {
-                        $html .= convert_ascii_table_to_html(\@code_block_lines);
-                    }
-                    else {
-                        $html .= "<pre>\n";
-                        for my $code_line (@code_block_lines) {
-                            $html .= encode_entities($code_line) . "\n";
-                        }
-                        $html .= "</pre>\n";
-                    }
-                    @code_block_lines = ();
-                    $in_code_block    = 0;
+                my @block_lines;
+                $i++; # Move past the opening ```
+                while ($i < @lines && $lines[$i] !~ /^```/) {
+                    push @block_lines, $lines[$i];
+                    $i++;
                 }
-                else {
-                    $in_code_block = 1;
+                $html .= _gemtext_to_html_code_block(\@block_lines);
+            }
+            elsif ($line =~ /^### /) {
+                $html .= _gemtext_to_html_heading($line);
+            }
+            elsif ($line =~ /^## /) {
+                $html .= _gemtext_to_html_heading($line);
+            }
+            elsif ($line =~ /^# /) {
+                $html .= _gemtext_to_html_heading($line);
+            }
+            elsif ($line =~ /^=> /) {
+                $html .= _gemtext_to_html_link($line);
+            }
+            elsif ($line =~ /^\* /) {
+                my @list_items;
+                while ($i < @lines && $lines[$i] =~ /^\* /) {
+                    push @list_items, $lines[$i];
+                    $i++;
                 }
-                next;
+                $html .= _gemtext_to_html_list(\@list_items);
+                $i--; # Decrement to re-evaluate the current line in the outer loop
             }
-
-            if ($in_code_block) {
-                push @code_block_lines, $line;
-                next;
+            elsif ($line !~ /^\s*$/) {
+                $html .= _gemtext_to_html_paragraph($line);
             }
-
-            
-
-            # Check if we need to close a list
-            if ($in_list && $line !~ /^\* /) {
-                $html .= "</ul>\n";
-                $in_list = 0;
-            }
-
-            # Headers
-            if ($line =~ /^### (.*)/) {
-                $html .= "<h3>" . encode_entities($1) . "</h3>\n";
-            }
-            elsif ($line =~ /^## (.*)/) {
-                $html .= "<h2>" . encode_entities($1) . "</h2>\n";
-            }
-            elsif ($line =~ /^# (.*)/) {
-                $html .= "<h1>" . encode_entities($1) . "</h1>\n";
-            }
-
-            # Links
-            elsif ($line =~ /^=> (\S+)\s+(.*)/) {
-                my ($url, $text) = ($1, $2);
-
-                # Drop 365-day summary links from HTML output
-                if ($url =~ /(?:^|[\/.])365day_summary_\d{8}\.gmi$/) {
-                    next;
-                }
-
-                # Convert .gmi links to .html
-                $url =~ s/\.gmi$/\.html/;
-                $html .= "<p><a href=\"" . encode_entities($url) . "\">" . encode_entities($text) . "</a></p>\n";
-            }
-
-            # Bullet points
-            elsif ($line =~ /^\* (.*)/) {
-                if (!$in_list) {
-                    $html .= "<ul>\n";
-                    $in_list = 1;
-                }
-                $html .= "<li>" . linkify_text($1) . "</li>\n";
-            }
-
-            # Empty line - skip to avoid excessive spacing
-            elsif ($line =~ /^\s*$/) {
-
-                # Skip empty lines for more compact output
-            }
-
-            # Regular text
-            else {
-                $html .= "<p>" . linkify_text($line) . "</p>\n";
-            }
-        }
-
-        # Close list if still open
-        if ($in_list) {
-            $html .= "</ul>\n";
+            # Else, it's a blank line, which we skip for compact output.
+            $i++;
         }
 
         return $html;
+    }
+
+    sub _gemtext_to_html_code_block {
+        my ($lines) = @_;
+        if (is_ascii_table($lines)) {
+            return convert_ascii_table_to_html($lines);
+        }
+        else {
+            my $html = "<pre>\n";
+            for my $code_line (@$lines) {
+                $html .= encode_entities($code_line) . "\n";
+            }
+            $html .= "</pre>\n";
+            return $html;
+        }
+    }
+
+    sub _gemtext_to_html_heading {
+        my ($line) = @_;
+        if ($line =~ /^### (.*)/) {
+            return "<h3>" . encode_entities($1) . "</h3>\n";
+        }
+        elsif ($line =~ /^## (.*)/) {
+            return "<h2>" . encode_entities($1) . "</h2>\n";
+        }
+        elsif ($line =~ /^# (.*)/) {
+            return "<h1>" . encode_entities($1) . "</h1>\n";
+        }
+        return '';
+    }
+
+    sub _gemtext_to_html_link {
+        my ($line) = @_;
+        if ($line =~ /^=> (\S+)\s+(.*)/) {
+            my ($url, $text) = ($1, $2);
+
+            # Drop 365-day summary links from HTML output
+            return '' if $url =~ /(?:^|[\/.])365day_summary_\d{8}\.gmi$/;
+
+            # Convert .gmi links to .html
+            $url =~ s/\.gmi$/\.html/;
+            return "<p><a href=\"" . encode_entities($url) . "\">" . encode_entities($text) . "</a></p>\n";
+        }
+        return '';
+    }
+
+    sub _gemtext_to_html_list {
+        my ($lines) = @_;
+        my $html = "<ul>\n";
+        for my $line (@$lines) {
+            if ($line =~ /^\* (.*)/) {
+                $html .= "<li>" . linkify_text($1) . "</li>\n";
+            }
+        }
+        $html .= "</ul>\n";
+        return $html;
+    }
+
+    sub _gemtext_to_html_paragraph {
+        my ($line) = @_;
+        return "<p>" . linkify_text($line) . "</p>\n";
     }
 
     # Check if the lines form an ASCII table
@@ -1259,6 +1264,135 @@ $content
 };
     }
 
+    # Sub: should_generate_daily_report
+    # - Purpose: Check if a daily report should be generated based on file existence and age.
+    # - Params: $date (YYYYMMDD), $report_path (str), $html_report_path (str).
+    # - Return: 1 if report should be generated, 0 otherwise.
+    sub should_generate_daily_report {
+        my ($date, $report_path, $html_report_path) = @_;
+
+        my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
+
+        # Calculate age of the data based on date in filename
+        my $today     = Time::Piece->new();
+        my $file_date = Time::Piece->strptime($date, '%Y%m%d');
+        my $age_days  = ($today - $file_date) / (24 * 60 * 60);
+
+        if (-e $report_path && -e $html_report_path) {
+
+            # Files exist
+            if ($age_days <= 3) {
+
+                # Data is recent (within 3 days), regenerate it
+                say "Regenerating daily report for $year-$month-$day (data age: "
+                    . sprintf("%.1f", $age_days)
+                    . " days)";
+                return 1;
+            }
+            else {
+                # Data is old (older than 3 days), skip if files exist
+                say "Skipping daily report for $year-$month-$day (files exist, data age: "
+                    . sprintf("%.1f", $age_days)
+                    . " days)";
+                return 0;
+            }
+        }
+        else {
+            # File doesn't exist, generate it
+            say "Generating new daily report for $year-$month-$day (file doesn't exist, data age: "
+                . sprintf("%.1f", $age_days)
+                . " days)";
+            return 1;
+        }
+    }
+
+    sub generate_feed_stats_section {
+        my ($stats) = @_;
+        my $report_content = "### Feed Statistics\n\n";
+        my @feed_rows;
+        push @feed_rows, [ 'Total',          $stats->{feed_ips}{'Total'}          // 0 ];
+        push @feed_rows, [ 'Gemini Gemfeed', $stats->{feed_ips}{'Gemini Gemfeed'} // 0 ];
+        push @feed_rows, [ 'Gemini Atom',    $stats->{feed_ips}{'Gemini Atom'}    // 0 ];
+        push @feed_rows, [ 'Web Gemfeed',    $stats->{feed_ips}{'Web Gemfeed'}    // 0 ];
+        push @feed_rows, [ 'Web Atom',       $stats->{feed_ips}{'Web Atom'}       // 0 ];
+        $report_content .= "```\n";
+        $report_content .= format_table([ 'Feed Type', 'Count' ], \@feed_rows);
+        $report_content .= "\n```\n\n";
+        return $report_content;
+    }
+
+    sub generate_top_n_table {
+        my (%args) = @_;
+        my $title = $args{title};
+        my $data = $args{data};
+        my $headers = $args{headers};
+        my $limit = $args{limit} // 50;
+        my $is_url = $args{is_url} // 0;
+
+        my $report_content = "### $title\n\n";
+        my @rows;
+        my @sorted_keys =
+            sort { ($data->{$b} // 0) <=> ($data->{$a} // 0) }
+            keys %$data;
+        my $truncated = @sorted_keys > $limit;
+        @sorted_keys = @sorted_keys[ 0 .. $limit - 1 ] if $truncated;
+
+        for my $key (@sorted_keys) {
+            push @rows, [ $key, $data->{$key} // 0 ];
+        }
+
+        if ($is_url) {
+            truncate_urls_for_table(\@rows, $headers->[1]);
+        }
+
+        $report_content .= "```\n";
+        $report_content .= format_table($headers, \@rows);
+        $report_content .= "\n```\n";
+        if ($truncated) {
+            $report_content .= "\n... and more (truncated to $limit entries).\n";
+        }
+        $report_content .= "\n";
+        return $report_content;
+    }
+
+    sub generate_top_urls_section {
+        my ($stats) = @_;
+        return generate_top_n_table(
+            title   => 'Top 50 URLs',
+            data    => $stats->{page_ips}{urls},
+            headers => [ 'URL', 'Unique Visitors' ],
+            is_url  => 1,
+        );
+    }
+
+    sub generate_top_hosts_section {
+        my ($stats) = @_;
+        return generate_top_n_table(
+            title   => 'Page Statistics (by Host)',
+            data    => $stats->{page_ips}{hosts},
+            headers => [ 'Host', 'Unique Visitors' ],
+        );
+    }
+
+    sub generate_summary_section {
+        my ($stats) = @_;
+        my $report_content = "### Summary\n\n";
+        my $total_requests =
+            ($stats->{count}{gemini} // 0) + ($stats->{count}{web} // 0);
+        $report_content .= "* Total requests: $total_requests\n";
+        $report_content .=
+            "* Filtered requests: " . ($stats->{count}{filtered} // 0) . "\n";
+        $report_content .=
+            "* Gemini requests: " . ($stats->{count}{gemini} // 0) . "\n";
+        $report_content .=
+            "* Web requests: " . ($stats->{count}{web} // 0) . "\n";
+        $report_content .=
+            "* IPv4 requests: " . ($stats->{count}{IPv4} // 0) . "\n";
+        $report_content .=
+            "* IPv6 requests: " . ($stats->{count}{IPv6} // 0) . "\n\n";
+        return $report_content;
+    }
+
     # Sub: report
     # - Purpose: Generate daily .gmi and .html reports per date, then summaries and index.
     # - Params: $stats_dir, $output_dir, $html_output_dir, %merged (date => stats).
@@ -1271,117 +1405,16 @@ $content
 
             my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
 
-            # Check if .gmi file exists and its age based on date in filename
             my $report_path      = "$output_dir/$date.gmi";
-            my $html_report_path = "$output_dir/$date.html";
+            my $html_report_path = "$html_output_dir/$date.html";
 
-            # Calculate age of the data based on date in filename
-            my $today     = Time::Piece->new();
-            my $file_date = Time::Piece->strptime($date, '%Y%m%d');
-            my $age_days  = ($today - $file_date) / (24 * 60 * 60);
+            next unless should_generate_daily_report($date, $report_path, $html_report_path);
 
-            if (-e $report_path && -e $html_report_path) {
-
-                # Files exist
-                if ($age_days <= 3) {
-
-                    # Data is recent (within 3 days), regenerate it
-                    say "Regenerating daily report for $year-$month-$day (data age: "
-                        . sprintf("%.1f", $age_days)
-                        . " days)";
-                }
-                else {
-                    # Data is old (older than 3 days), skip if files exist
-                    say "Skipping daily report for $year-$month-$day (files exist, data age: "
-                        . sprintf("%.1f", $age_days)
-                        . " days)";
-                    next;
-                }
-            }
-            else {
-                # File doesn't exist, generate it
-                say "Generating new daily report for $year-$month-$day (file doesn't exist, data age: "
-                    . sprintf("%.1f", $age_days)
-                    . " days)";
-            }
-
-            my $report_content = "";
-
-            $report_content .= "## Stats for $year-$month-$day\n\n";
-
-            # Feed counts first
-            $report_content .= "### Feed Statistics\n\n";
-            my @feed_rows;
-            push @feed_rows, [ 'Total',          $stats->{feed_ips}{'Total'}          // 0 ];
-            push @feed_rows, [ 'Gemini Gemfeed', $stats->{feed_ips}{'Gemini Gemfeed'} // 0 ];
-            push @feed_rows, [ 'Gemini Atom',    $stats->{feed_ips}{'Gemini Atom'}    // 0 ];
-            push @feed_rows, [ 'Web Gemfeed',    $stats->{feed_ips}{'Web Gemfeed'}    // 0 ];
-            push @feed_rows, [ 'Web Atom',       $stats->{feed_ips}{'Web Atom'}       // 0 ];
-            $report_content .= "```\n";
-            $report_content .= format_table([ 'Feed Type', 'Count' ], \@feed_rows);
-            $report_content .= "\n```\n\n";
-
-            # Top 50 URLs next
-            $report_content .= "### Top 50 URLs\n\n";
-            my @url_rows;
-            my $urls = $stats->{page_ips}{urls};
-            my @sorted_urls =
-                sort { ($urls->{$b} // 0) <=> ($urls->{$a} // 0) }
-                keys %$urls;
-            my $truncated = @sorted_urls > 50;
-            @sorted_urls = @sorted_urls[ 0 .. 49 ] if $truncated;
-
-            for my $url (@sorted_urls) {
-                push @url_rows, [ $url, $urls->{$url} // 0 ];
-            }
-
-            # Truncate URLs to fit within 100-character rows
-            truncate_urls_for_table(\@url_rows, 'Unique Visitors');
-            $report_content .= "```\n";
-            $report_content .= format_table([ 'URL', 'Unique Visitors' ], \@url_rows);
-            $report_content .= "\n```\n";
-            if ($truncated) {
-                $report_content .= "\n... and more (truncated to 50 entries).\n";
-            }
-            $report_content .= "\n";
-
-            # Other tables afterwards: Hosts, then Summary
-            $report_content .= "### Page Statistics (by Host)\n\n";
-            my @host_rows;
-            my $hosts = $stats->{page_ips}{hosts};
-            my @sorted_hosts =
-                sort { ($hosts->{$b} // 0) <=> ($hosts->{$a} // 0) }
-                keys %$hosts;
-
-            $truncated    = @sorted_hosts > 50;
-            @sorted_hosts = @sorted_hosts[ 0 .. 49 ] if $truncated;
-
-            for my $host (@sorted_hosts) {
-                push @host_rows, [ $host, $hosts->{$host} // 0 ];
-            }
-            $report_content .= "```\n";
-            $report_content .= format_table([ 'Host', 'Unique Visitors' ], \@host_rows);
-            $report_content .= "\n```\n";
-            if ($truncated) {
-                $report_content .= "\n... and more (truncated to 50 entries).\n";
-            }
-            $report_content .= "\n";
-
-            # Summary last
-            $report_content .= "### Summary\n\n";
-            my $total_requests =
-                ($stats->{count}{gemini} // 0) + ($stats->{count}{web} // 0);
-            $report_content .= "* Total requests: $total_requests\n";
-            $report_content .=
-                "* Filtered requests: " . ($stats->{count}{filtered} // 0) . "\n";
-            $report_content .=
-                "* Gemini requests: " . ($stats->{count}{gemini} // 0) . "\n";
-            $report_content .=
-                "* Web requests: " . ($stats->{count}{web} // 0) . "\n";
-            $report_content .=
-                "* IPv4 requests: " . ($stats->{count}{IPv4} // 0) . "\n";
-            $report_content .=
-                "* IPv6 requests: " . ($stats->{count}{IPv6} // 0) . "\n\n";
+            my $report_content = "## Stats for $year-$month-$day\n\n";
+            $report_content .= generate_feed_stats_section($stats);
+            $report_content .= generate_top_urls_section($stats);
+            $report_content .= generate_top_hosts_section($stats);
+            $report_content .= generate_summary_section($stats);
 
             # Add links to summary reports (only monthly)
             $report_content .= "## Related Reports\n\n";
@@ -1595,29 +1628,15 @@ $content
         return (\%all_hosts, \%all_urls);
     }
 
-    # Sub: build_top_hosts_section
-    # - Purpose: Build Top-50 hosts table for the aggregated period.
-    # - Params: $all_hosts (hashref), $days (int default 30).
-    # - Return: gemtext string.
     sub build_top_hosts_section {
         my ($all_hosts, $days) = @_;
         $days //= 30;
 
-        my $content = "## Top 50 Hosts (${days}-Day Total)\n\n```\n";
-
-        my @host_rows;
-        my @sorted_hosts =
-            sort { $all_hosts->{$b} <=> $all_hosts->{$a} } keys %$all_hosts;
-        @sorted_hosts = @sorted_hosts[ 0 .. 49 ] if @sorted_hosts > 50;
-
-        for my $host (@sorted_hosts) {
-            push @host_rows, [ $host, $all_hosts->{$host} ];
-        }
-
-        $content .= format_table([ 'Host', 'Visitors' ], \@host_rows);
-        $content .= "\n```\n\n";
-
-        return $content;
+        return generate_top_n_table(
+            title   => "Top 50 Hosts (${days}-Day Total)",
+            data    => $all_hosts,
+            headers => [ 'Host', 'Visitors' ],
+        );
     }
 
     # Sub: build_top_urls_section
@@ -1628,24 +1647,12 @@ $content
         my ($all_urls, $days) = @_;
         $days //= 30;
 
-        my $content = "## Top 50 URLs (${days}-Day Total)\n\n```\n";
-
-        my @url_rows;
-        my @sorted_urls =
-            sort { $all_urls->{$b} <=> $all_urls->{$a} } keys %$all_urls;
-        @sorted_urls = @sorted_urls[ 0 .. 49 ] if @sorted_urls > 50;
-
-        for my $url (@sorted_urls) {
-            push @url_rows, [ $url, $all_urls->{$url} ];
-        }
-
-        # Truncate URLs to fit within 100-character rows
-        truncate_urls_for_table(\@url_rows, 'Visitors');
-
-        $content .= format_table([ 'URL', 'Visitors' ], \@url_rows);
-        $content .= "\n```\n\n";
-
-        return $content;
+        return generate_top_n_table(
+            title   => "Top 50 URLs (${days}-Day Total)",
+            data    => $all_urls,
+            headers => [ 'URL', 'Visitors' ],
+            is_url  => 1,
+        );
     }
 
     # Sub: build_summary_links
@@ -1774,6 +1781,7 @@ $content
 }
 
 package main;
+
 # Package: main — CLI entrypoint and orchestration
 # - Purpose: Parse options and invoke parse/replicate/report flows.
 use Getopt::Long;
