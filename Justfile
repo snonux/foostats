@@ -24,3 +24,8 @@ reports:
     mkdir -p out_gmi out_html
     perl foostats.pl --report --stats-dir stats --output-dir out_gmi --html-output-dir out_html
     echo "Generated Gemtext in out_gmi and HTML in out_html"
+gather-fooodds:
+    @echo Gathering to fooodds.log
+    (ssh rex@fishfinger.buetow.org '(doas cat /var/log/fooodds; doas zcat /var/log/fooodds.*) | sort -u';  ssh rex@blowfish.buetow.org '( doas cat /var/log/fooodds; doas zcat /var/log/fooodds.0*) | sort -u' ) | grep -F -v 'logfile turned over' | sort -u > fooodds.log
+    wc -l fooodds.log
+    @echo Now check fooodds.log manually and update fooodds.txt accordingly. Any new paths to block?
