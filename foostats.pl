@@ -1073,6 +1073,7 @@ package Foostats::Reporter {
         my ($lines)   = @_;
         my $html      = "<table>\n";
         my $row_count = 0;
+        my $total_col_idx = -1;
 
         for my $line (@$lines) {
 
@@ -1084,13 +1085,28 @@ package Foostats::Reporter {
             @cells = grep { length($_) > 0 } @cells;    # Remove empty cells
 
             if (@cells) {
+                my $is_total_row = (trim($cells[0]) eq 'Total');
                 $html .= "<tr>\n";
 
-                # First row is header
+                if ($row_count == 0) { # Header row
+                    for my $i (0 .. $#cells) {
+                        if (trim($cells[$i]) eq 'Total') {
+                            $total_col_idx = $i;
+                            last;
+                        }
+                    }
+                }
+
                 my $tag = ($row_count == 0) ? "th" : "td";
-                for my $cell (@cells) {
-                    my $val = trim($cell);
-                    $html .= "  <$tag>" . linkify_text($val) . "</$tag>\n";
+                for my $i (0 .. $#cells) {
+                    my $val = trim($cells[$i]);
+                    my $cell_content = linkify_text($val);
+
+                    if ($is_total_row || ($i == $total_col_idx && $row_count > 0)) {
+                        $html .= "  <$tag><b>" . $cell_content . "</b></$tag>\n";
+                    } else {
+                        $html .= "  <$tag>" . $cell_content . "</$tag>\n";
+                    }
                 }
                 $html .= "</tr>\n";
                 $row_count++;
@@ -1517,10 +1533,29 @@ $content
         return "" unless $days_with_stats > 0;
 
         my @avg_rows;
-        for my $key (sort keys %totals) {
+        my $total_avg = 0;
+        my $has_total = 0;
+
+        # Separate 'Total' from other keys
+        my @other_keys;
+        for my $key (keys %totals) {
+            if ($key eq 'Total') {
+                $total_avg = sprintf("%.2f", $totals{$key} / $days_with_stats);
+                $has_total = 1;
+            } else {
+                push @other_keys, $key;
+            }
+        }
+
+        # Sort other keys and create rows
+        for my $key (sort @other_keys) {
             my $avg = sprintf("%.2f", $totals{$key} / $days_with_stats);
             push @avg_rows, [ $key, $avg ];
         }
+
+        # Add Total row at the end
+        push @avg_rows, [ 'Total', $total_avg ] if $has_total;
+
 
         my $content = "### Feed Statistics Daily Average (Last 30 Days)\n\n```\n";
         $content .= format_table([ 'Feed Type', 'Daily Average' ], \@avg_rows);
