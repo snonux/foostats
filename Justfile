@@ -29,3 +29,4 @@ gather-fooodds:
     (ssh rex@fishfinger.buetow.org '(doas cat /var/log/fooodds; doas zcat /var/log/fooodds.*) | sort -u';  ssh rex@blowfish.buetow.org '( doas cat /var/log/fooodds; doas zcat /var/log/fooodds.0*) | sort -u' ) | grep -F -v 'logfile turned over' | sort -u > fooodds.log
     wc -l fooodds.log
     @echo Now check fooodds.log manually and update fooodds.txt accordingly. Any new paths to block?
+    @echo You could use an LLM to add more suspicious enrtries from the fooodds.log to the fooodds.txt file!
