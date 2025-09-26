@@ -1058,15 +1058,11 @@ package Foostats::Reporter {
         # host[/path]
         if ($t =~ m{^([A-Za-z0-9.-]+\.[A-Za-z]{2,})(/[^\s<]*)?$}) {
             my ($host, $path) = ($1, $2 // '');
-            my $has_ellipsis = index($t, '...') != -1 || index(($path // ''), '...') != -1;
             my $is_gemini    = defined($path) && $path =~ /\.gmi(?:[?#].*)?$/i;
             my $scheme       = 'https';
 
             # If truncated, fall back to host root
-            my $href =
-                $has_ellipsis
-                ? sprintf('%s://%s/', $scheme, $host)
-                : sprintf('%s://%s%s', $scheme, $host, ($path eq '' ? '/' : $path));
+            my $href = sprintf('%s://%s%s', $scheme, $host, ($path eq '' ? '/' : $path));
             return ($href . $trail);
         }
 
