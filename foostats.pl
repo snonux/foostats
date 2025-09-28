@@ -748,6 +748,27 @@ package Foostats::Reporter {
     use Time::Piece;
     use HTML::Entities qw(encode_entities);
 
+    our @TRUNCATED_URL_MAPPINGS;
+
+    sub reset_truncated_url_mappings { @TRUNCATED_URL_MAPPINGS = (); }
+
+    sub _record_truncated_url_mapping {
+        my ($truncated, $original) = @_;
+        push @TRUNCATED_URL_MAPPINGS, { truncated => $truncated, original => $original };
+    }
+
+    sub _lookup_full_url_for {
+        my ($candidate) = @_;
+        for my $idx (0 .. $#TRUNCATED_URL_MAPPINGS) {
+            my $entry = $TRUNCATED_URL_MAPPINGS[$idx];
+            next unless $entry->{truncated} eq $candidate;
+            my $original = $entry->{original};
+            splice @TRUNCATED_URL_MAPPINGS, $idx, 1;
+            return $original;
+        }
+        return undef;
+    }
+
     # Sub: truncate_url
     # - Purpose: Middle-ellipsize long URLs to fit within a target length.
     # - Params: $url (str), $max_length (int default 100).
@@ -793,7 +814,12 @@ package Foostats::Reporter {
 
         # Truncate URLs in place
         for my $row (@$url_rows) {
-            $row->[0] = truncate_url($row->[0], $max_url_length);
+            my $original  = $row->[0];
+            my $truncated = truncate_url($original, $max_url_length);
+            if ($truncated ne $original) {
+                _record_truncated_url_mapping($truncated, $original);
+            }
+            $row->[0] = $truncated;
         }
     }
 
@@ -933,7 +959,11 @@ package Foostats::Reporter {
 
             # Convert .gmi links to .html
             $url =~ s/\.gmi$/\.html/;
-            return "<p><a href=\"" . encode_entities($url) . "\">" . encode_entities($text) . "</a></p>\n";
+            return
+                  "<p><a href=\""
+                . encode_entities($url) . "\">"
+                . encode_entities($text)
+                . "</a></p>\n";
         }
         return '';
     }
@@ -1058,8 +1088,8 @@ package Foostats::Reporter {
         # host[/path]
         if ($t =~ m{^([A-Za-z0-9.-]+\.[A-Za-z]{2,})(/[^\s<]*)?$}) {
             my ($host, $path) = ($1, $2 // '');
-            my $is_gemini    = defined($path) && $path =~ /\.gmi(?:[?#].*)?$/i;
-            my $scheme       = 'https';
+            my $is_gemini = defined($path) && $path =~ /\.gmi(?:[?#].*)?$/i;
+            my $scheme    = 'https';
 
             # If truncated, fall back to host root
             my $href = sprintf('%s://%s%s', $scheme, $host, ($path eq '' ? '/' : $path));
@@ -1092,11 +1122,23 @@ package Foostats::Reporter {
             my ($core, $trail) = ($match, '');
             if ($core =~ s{([)\]\}.,;:!?]+)$}{}) { $trail = $1; }
 
-            my $href = _guess_href($core);
+            my $display = $core;
+            if (my $full = _lookup_full_url_for($core)) {
+                $display = $full;
+            }
+
+            my $href = _guess_href($display);
+            if (!$href) {
+                $href = _guess_href($core);
+            }
+
             if ($href) {
                 $href =~ s/\.gmi$/\.html/i;
-                $out .= sprintf('<a href="%s">%s</a>%s',
-                    encode_entities($href), encode_entities($core), encode_entities($trail));
+                $out .= sprintf(
+                    '<a href="%s">%s</a>%s',
+                    encode_entities($href), encode_entities($display),
+                    encode_entities($trail)
+                );
             }
             else {
                 # Not a linkable token after all
@@ -1330,6 +1372,7 @@ $content
 
             next unless should_generate_daily_report($date, $report_path, $html_report_path);
 
+            reset_truncated_url_mappings();
             my $report_content = "## Stats for $year-$month-$day\n\n";
             $report_content .= generate_feed_stats_section($stats);
             $report_content .= generate_top_urls_section($stats);
@@ -1356,6 +1399,7 @@ $content
             my $html_page    = generate_html_page("Stats for $year-$month-$day", $html_content);
             say "Writing HTML report to $html_path";
             FileHelper::write($html_path, $html_page);
+            reset_truncated_url_mappings();
         }
 
         # Generate summary reports
@@ -1381,6 +1425,7 @@ $content
         my $report_date = $today->strftime('%Y%m%d');
 
         # Build report content
+        reset_truncated_url_mappings();
         my $report_content = build_report_header($today, $days);
 
         # Order: feed counts -> Top URLs -> daily top 3 for last 30 days -> other tables
@@ -1416,6 +1461,8 @@ $content
         else {
             say "Skipping HTML generation for 365-day summary (Gemtext only)";
         }
+
+        reset_truncated_url_mappings();
     }
 
     sub build_feed_statistics_daily_average_section {
@@ -1499,7 +1546,8 @@ $content
             push @summary_rows, build_daily_summary_row($date, $stats);
         }
 
-        $content .= format_table([ 'Date', 'Filtered', 'Gemini', 'Web', 'IPv4', 'IPv6', 'Total' ], \@summary_rows);
+        $content .= format_table([ 'Date', 'Filtered', 'Gemini', 'Web', 'IPv4', 'IPv6', 'Total' ],
+            \@summary_rows);
         $content .= "\n```\n\n";
 
         return $content;
@@ -1542,7 +1590,9 @@ $content
             push @feed_rows, build_feed_statistics_row($date, $stats);
         }
 
-        $content .= format_table([ 'Date', 'Gem Feed', 'Gem Atom', 'Web Feed', 'Web Atom', 'Total' ], \@feed_rows);
+        $content .=
+            format_table([ 'Date', 'Gem Feed', 'Gem Atom', 'Web Feed', 'Web Atom', 'Total' ],
+            \@feed_rows);
         $content .= "\n```\n\n";
 
         return $content;
@@ -1815,8 +1865,8 @@ sub foostats_main {
     my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
     my $odds_file = $stats_dir . '/fooodds.txt';
     my $odds_log  = '/var/log/fooodds';
-    my $output_dir;         # Will default to $stats_dir/gemtext if not specified
-    my $html_output_dir;    # Will default to /var/www/htdocs/gemtexter/stats.foo.zone if not specified
+    my $output_dir;      # Will default to $stats_dir/gemtext if not specified
+    my $html_output_dir; # Will default to /var/www/htdocs/gemtexter/stats.foo.zone if not specified
     my $partner_node =
         hostname eq 'fishfinger.buetow.org'
         ? 'blowfish.buetow.org'
@@ -1850,7 +1900,8 @@ sub foostats_main {
     $output_dir      //= '/var/gemini/stats.foo.zone';
     $html_output_dir //= '/var/www/htdocs/gemtexter/stats.foo.zone';
 
-    Foostats::Reporter::report($stats_dir, $output_dir, $html_output_dir, Foostats::Merger::merge($stats_dir))
+    Foostats::Reporter::report($stats_dir, $output_dir, $html_output_dir,
+        Foostats::Merger::merge($stats_dir))
         if $report
         or $all;
 }

@@ -68,4 +68,18 @@ subtest 'gemtext_to_html ascii tables' => sub {
     is($html, $expected, 'ASCII tables are converted correctly');
 };
 
+subtest 'gemtext_to_html expands truncated URLs' => sub {
+    Foostats::Reporter::reset_truncated_url_mappings();
+    my $original_url = 'https://example.com/a/really/long/path/that/should/get/truncated/because/it/exceeds/the/limit.html';
+    my $rows         = [ [ $original_url, '12' ] ];
+    Foostats::Reporter::truncate_urls_for_table($rows, 'Visitors');
+    my $table   = Foostats::Reporter::format_table([ 'URL', 'Visitors' ], $rows);
+    my $gemtext = "```\n$table\n```";
+    my $html    = Foostats::Reporter::gemtext_to_html($gemtext);
+    like($html,
+        qr{<a href=\"https://example.com/a/really/long/path/that/should/get/truncated/because/it/exceeds/the/limit\.html\">https://example.com/a/really/long/path/that/should/get/truncated/because/it/exceeds/the/limit\.html</a>},
+        'HTML renders full URL without ellipsis');
+    Foostats::Reporter::reset_truncated_url_mappings();
+};
+
 done_testing();
