@@ -15,7 +15,7 @@ no warnings qw(experimental::refaliasing);
 # Debugging aids like diagnostics are noisy in production.
 # Removed per review: enable locally when debugging only.
 
-use constant VERSION => 'v0.1.0';
+use constant VERSION => 'v0.2.0';
 
 # Package: FileHelper — small file/JSON helpers
 # - Purpose: Atomic writes, gzip JSON read/write, and line reading.
@@ -959,11 +959,7 @@ package Foostats::Reporter {
 
             # Convert .gmi links to .html
             $url =~ s/\.gmi$/\.html/;
-            return
-                  "<p><a href=\""
-                . encode_entities($url) . "\">"
-                . encode_entities($text)
-                . "</a></p>\n";
+            return "<p><a href=\"" . encode_entities($url) . "\">" . encode_entities($text) . "</a></p>\n";
         }
         return '';
     }
@@ -1546,8 +1542,7 @@ $content
             push @summary_rows, build_daily_summary_row($date, $stats);
         }
 
-        $content .= format_table([ 'Date', 'Filtered', 'Gemini', 'Web', 'IPv4', 'IPv6', 'Total' ],
-            \@summary_rows);
+        $content .= format_table([ 'Date', 'Filtered', 'Gemini', 'Web', 'IPv4', 'IPv6', 'Total' ], \@summary_rows);
         $content .= "\n```\n\n";
 
         return $content;
@@ -1590,9 +1585,7 @@ $content
             push @feed_rows, build_feed_statistics_row($date, $stats);
         }
 
-        $content .=
-            format_table([ 'Date', 'Gem Feed', 'Gem Atom', 'Web Feed', 'Web Atom', 'Total' ],
-            \@feed_rows);
+        $content .= format_table([ 'Date', 'Gem Feed', 'Gem Atom', 'Web Feed', 'Web Atom', 'Total' ], \@feed_rows);
         $content .= "\n```\n\n";
 
         return $content;
@@ -1865,8 +1858,8 @@ sub foostats_main {
     my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
     my $odds_file = $stats_dir . '/fooodds.txt';
     my $odds_log  = '/var/log/fooodds';
-    my $output_dir;      # Will default to $stats_dir/gemtext if not specified
-    my $html_output_dir; # Will default to /var/www/htdocs/gemtexter/stats.foo.zone if not specified
+    my $output_dir;         # Will default to $stats_dir/gemtext if not specified
+    my $html_output_dir;    # Will default to /var/www/htdocs/gemtexter/stats.foo.zone if not specified
     my $partner_node =
         hostname eq 'fishfinger.buetow.org'
         ? 'blowfish.buetow.org'
@@ -1900,8 +1893,7 @@ sub foostats_main {
     $output_dir      //= '/var/gemini/stats.foo.zone';
     $html_output_dir //= '/var/www/htdocs/gemtexter/stats.foo.zone';
 
-    Foostats::Reporter::report($stats_dir, $output_dir, $html_output_dir,
-        Foostats::Merger::merge($stats_dir))
+    Foostats::Reporter::report($stats_dir, $output_dir, $html_output_dir, Foostats::Merger::merge($stats_dir))
         if $report
         or $all;
 }
