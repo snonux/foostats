@@ -2,6 +2,8 @@
 
 A privacy-respecting web analytics tool for OpenBSD that processes HTTP/HTTPS and Gemini protocol logs to generate anonymous site statistics. Designed for the foo.zone ecosystem and similar sites, it provides comprehensive traffic analysis while preserving visitor privacy through SHA3-512 IP hashing.
 
+Read also this blog post: https://foo.zone/gemfeed/2025-11-02-perl-new-features-and-foostats.html
+
 ## Features
 
 - **Privacy-First**: IP addresses are hashed using SHA3-512 before storage; no personal information retained
