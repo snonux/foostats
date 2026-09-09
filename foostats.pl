@@ -15,7 +15,7 @@ no warnings qw(experimental::refaliasing);
 # Debugging aids like diagnostics are noisy in production.
 # Removed per review: enable locally when debugging only.
 
-use constant VERSION => 'v0.2.0';
+use constant VERSION => 'v0.2.1';
 
 # Package: FileHelper — small file/JSON helpers
 # - Purpose: Atomic writes, gzip JSON read/write, and line reading.
@@ -1653,18 +1653,19 @@ $content
     }
 
     # Sub: build_top_urls_section
-    # - Purpose: Build Top-10 URLs table for the aggregated period (with truncation).
+    # - Purpose: Build Top-N URLs table for the aggregated period (with truncation).
     # - Params: $all_urls (hashref), $days (int default 30).
     # - Return: gemtext string.
     sub build_top_urls_section {
         my ($all_urls, $days) = @_;
         $days //= 30;
+        my $limit = 10;
 
         return generate_top_n_table(
-            title   => "Top 10 URLs (${days}-Day Total)",
+            title   => "Top $limit URLs (${days}-Day Total)",
             data    => $all_urls,
             headers => [ 'URL', 'Visitors' ],
-            limit   => 10,
+            limit   => $limit,
             is_url  => 1,
         );
     }
