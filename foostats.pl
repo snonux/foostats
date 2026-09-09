@@ -1653,7 +1653,7 @@ $content
     }
 
     # Sub: build_top_urls_section
-    # - Purpose: Build Top-50 URLs table for the aggregated period (with truncation).
+    # - Purpose: Build Top-10 URLs table for the aggregated period (with truncation).
     # - Params: $all_urls (hashref), $days (int default 30).
     # - Return: gemtext string.
     sub build_top_urls_section {
@@ -1661,9 +1661,10 @@ $content
         $days //= 30;
 
         return generate_top_n_table(
-            title   => "Top 50 URLs (${days}-Day Total)",
+            title   => "Top 10 URLs (${days}-Day Total)",
             data    => $all_urls,
             headers => [ 'URL', 'Visitors' ],
+            limit   => 10,
             is_url  => 1,
         );
     }

@@ -185,6 +185,7 @@ robots.txt
 /sites
 .sql
 /ueditor
+/target.html
 /vendor
 @vite
 wordpress
