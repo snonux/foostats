@@ -1,8 +1,15 @@
 use strict;
 use warnings;
 use Test::More;
+use File::Temp qw(tempdir);
 
 ok( do './foostats.pl', 'loaded foostats.pl' );
+my $keys = tempdir(CLEANUP => 1);
+open my $kf, '>', "$keys/key" or die $!;
+print $kf 'a1' x 32;
+close $kf;
+chmod 0600, "$keys/key";
+Foostats::Privacy::load_key("$keys/key");
 
 # Create a minimal access log line approximating combined/forwarded format
 my $dir = 't/data';

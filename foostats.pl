@@ -22,6 +22,15 @@ use constant VERSION => 'v0.2.1';
 # - Notes: Dies on I/O errors; JSON encoding uses core JSON.
 package FileHelper {
     use JSON;
+    use File::Basename qw(dirname);
+
+    # Counter archives are private to the owner and the replication group.
+    sub private_stats_file ($path) {
+        my $gid = (stat dirname($path))[5];
+        defined $gid or die "Cannot inspect statistics directory\n";
+        chown -1, $gid, $path or die "Cannot set statistics group\n";
+        chmod 0640, $path or die "Cannot protect statistics file\n";
+    }
 
     # Sub: write
     # - Purpose: Atomic write to a file via "$path.tmp" and rename.
@@ -44,7 +53,8 @@ package FileHelper {
         say "Writing $path";
         open my $fd, '>:gzip', "$path.tmp" or die "$path.tmp: $!";
         print $fd $json;
-        close $fd;
+        close $fd or die "Cannot close statistics file\n";
+        private_stats_file("$path.tmp");
 
         rename "$path.tmp", $path or die "$path.tmp: $!";
     }
@@ -71,6 +81,54 @@ package FileHelper {
         chomp(@lines = <$fh>);
         close($fh);
         return @lines;
+    }
+}
+
+# Package: Foostats::Privacy — shared keyed pseudonyms and dataset identity.
+package Foostats::Privacy {
+    use Digest::SHA3 qw(sha3_512 sha3_256_hex);
+    use Digest::HMAC qw(hmac);
+    use MIME::Base64 qw(encode_base64);
+    use Fcntl qw(O_RDONLY O_NOFOLLOW S_ISREG);
+
+    my $key;
+
+    sub load_key ($path) {
+        undef $key;  # A failed reload must never retain an old key.
+        sysopen my $fh, $path, O_RDONLY | O_NOFOLLOW
+            or die "Cannot open private Foostats HMAC key\n";
+        my @info = stat $fh;
+        S_ISREG($info[2]) && $info[4] == $> && !($info[2] & 0077) && $info[7] <= 4097
+            or die "Foostats key must be a private regular file owned by the current user\n";
+        local $/;
+        my $hex = <$fh>;
+        close $fh or die "Cannot close Foostats HMAC key\n";
+        $hex =~ s/\n\z//;
+        $hex =~ /\A[0-9a-fA-F]{64,4096}\z/ && length($hex) % 2 == 0
+            or die "Foostats key must contain at least 32 bytes encoded as hexadecimal\n";
+        $key = pack('H*', $hex);
+    }
+
+    sub digest ($data) {
+        defined $key or die "Foostats HMAC key is not loaded\n";
+        # SHA3-512's rate is 576 bits: HMAC requires a 72-byte block,
+        # not Digest::HMAC's default 64. Verified against NIST vectors.
+        my $tag = encode_base64(hmac($data, $key, \&sha3_512, 72), '');
+        $tag =~ s/=+\z//;
+        return $tag;
+    }
+
+    sub metadata () {
+        defined $key or die "Foostats HMAC key is not loaded\n";
+        return { scheme => 'hmac-sha3-512-v1', key_id => sha3_256_hex($key) };
+    }
+
+    sub validate_stats ($stats) {
+        my $expected = metadata();
+        ref($stats) eq 'HASH' && ref($stats->{privacy}) eq 'HASH'
+            && ($stats->{privacy}{scheme} // '') eq $expected->{scheme}
+            && ($stats->{privacy}{key_id} // '') eq $expected->{key_id}
+            or die "Legacy statistics or a different Foostats HMAC key; rebuild the private dataset\n";
     }
 }
 
@@ -102,7 +160,6 @@ package DateHelper {
 # - Purpose: Read web and gemini logs, anonymize IPs, and emit normalized events.
 # - Output Event: { proto, host, ip_hash, ip_proto, date, time, uri_path, status }
 package Foostats::Logreader {
-    use Digest::SHA3 'sha3_512_base64';
     use File::stat;
     use PerlIO::gzip;
     use Time::Piece;
@@ -120,12 +177,12 @@ package Foostats::Logreader {
     sub web_logs_glob { $ENV{FOOSTATS_WEB_LOGS_GLOB} // '/var/www/logs/access.log*' }
 
     # Sub: anonymize_ip
-    # - Purpose: Classify IPv4/IPv6 and map IP to a stable SHA3-512 base64 hash.
+    # - Purpose: Classify IPv4/IPv6 and map IP to a shared keyed pseudonym.
     # - Params: $ip (str) source IP.
     # - Return: ($hash, $proto) where $proto is 'IPv4' or 'IPv6'.
     sub anonymize_ip ($ip) {
         my $ip_proto = contains($ip, ':') ? 'IPv6' : 'IPv4';
-        my $ip_hash  = sha3_512_base64 $ip;
+        my $ip_hash  = Foostats::Privacy::digest($ip);
         return ($ip_hash, $ip_proto);
     }
 
@@ -496,7 +553,11 @@ package Foostats::FileOutputter {
     # - Return: Foostats::FileOutputter instance.
     sub new ($class, %args) {
         my $self = bless \%args, $class;
-        mkdir $self->{stats_dir} or die $self->{stats_dir} . ": $!" unless -d $self->{stats_dir};
+        -l $self->{stats_dir} and die "Statistics directory must not be a symlink\n";
+        mkdir $self->{stats_dir}, 0700 or die $self->{stats_dir} . ": $!" unless -d $self->{stats_dir};
+        my @info = stat $self->{stats_dir};
+        $info[4] == $> && !($info[2] & 0027)
+            or die "Statistics directory must be private, owned by the current user, and not writable by its group\n";
         return $self;
     }
 
@@ -520,6 +581,7 @@ package Foostats::FileOutputter {
             sub ($self, $date_key, $stats) {
                 my $hostname = hostname();
                 my $path     = $self->{stats_dir} . "/${date_key}.$hostname.json.gz";
+                $stats->{privacy} = Foostats::Privacy::metadata();
                 FileHelper::write_json_gz $path, $stats;
             }
         );
@@ -534,19 +596,29 @@ package Foostats::FileOutputter {
     }
 }
 
-# Package: Foostats::Replicator — pull partner stats files over HTTP(S)
+# Package: Foostats::Replicator — pull private partner stats over WireGuard rsync
 # - Purpose: Fetch recent partner node stats into local stats dir.
 package Foostats::Replicator {
     use JSON;
     use File::Basename;
-    use LWP::UserAgent;
+    use File::Temp qw(tempfile);
     use String::Util qw(endswith);
 
     # Sub: replicate
     # - Purpose: For each proto and last 31 days, replicate newest files.
     # - Params: $stats_dir (str) local dir; $partner_node (str) hostname.
     # - Return: undef (best-effort fetches).
-    sub replicate ($stats_dir, $partner_node) {
+    sub replicate ($stats_dir, $partner_node, $partner_address = undef) {
+        $partner_node =~ /\A[A-Za-z0-9][A-Za-z0-9.-]*\z/
+            or die "Invalid partner node name\n";
+        unless (defined $partner_address) {
+            $partner_node =~ /\A(?:blowfish|fishfinger)\.buetow\.org\z/
+                or die "Custom partners require an explicit private partner address\n";
+            ($partner_address = $partner_node) =~ s/\.buetow\.org\z/.wg0.wan.buetow.org/;
+        }
+        $partner_address =~ /\A(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9][A-Za-z0-9.-]*)(?::[0-9]+)?\z/
+            or die "Invalid private partner address\n";
+        Foostats::FileOutputter->new(stats_dir => $stats_dir);
         say "Replicating from $partner_node";
 
         for my $proto (qw(gemini web)) {
@@ -557,7 +629,7 @@ package Foostats::Replicator {
                 my $dest_path = "${file_base}.$partner_node.json.gz";
 
                 replicate_file(
-                    "https://$partner_node/foostats/$dest_path",
+                    "rsync://$partner_address/foostats-private/$dest_path",
                     "$stats_dir/$dest_path",
                     $count++ < 3,    # Always replicate the newest 3 files.
                 );
@@ -566,7 +638,7 @@ package Foostats::Replicator {
     }
 
     # Sub: replicate_file
-    # - Purpose: Download a single URL to a destination unless already present (unless forced).
+    # - Purpose: Download and validate a private archive before atomic replacement.
     # - Params: $remote_url (str) source; $dest_path (str) destination; $force (bool/int).
     # - Return: undef; logs failures.
     sub replicate_file ($remote_url, $dest_path, $force) {
@@ -574,15 +646,24 @@ package Foostats::Replicator {
         # $dest_path already exists, not replicating it
         return if !$force && -f $dest_path;
 
-        say "Replicating $remote_url to $dest_path (force:$force)... ";
-        my $response = LWP::UserAgent->new->get($remote_url);
-        unless ($response->is_success) {
-            say "\nFailed to fetch the file: " . $response->status_line;
+        my ($fh, $temporary) = tempfile('.replica-XXXXXXXX', DIR => dirname($dest_path), UNLINK => 0);
+        close $fh or die "Cannot close replication temporary file\n";
+        my $status = system('rsync', '-rt', '--timeout=30', '--contimeout=10', '--', $remote_url, $temporary);
+        if ($status != 0) {
+            unlink $temporary or die "Cannot remove failed replication file\n";
+            say "Partner statistics unavailable; retaining the previous local copy";
             return;
         }
-
-        FileHelper::write $dest_path, $response->decoded_content;
-        say 'done';
+        my $valid = eval {
+            Foostats::Privacy::validate_stats(FileHelper::read_json_gz($temporary));
+            FileHelper::private_stats_file($temporary);
+            rename $temporary, $dest_path or die "Cannot replace replicated statistics\n";
+            1;
+        };
+        unless ($valid) {
+            unlink $temporary or die "Cannot remove invalid replication file\n";
+            die "Invalid or incompatible private partner statistics\n";
+        }
     }
 }
 
@@ -734,6 +815,7 @@ package Foostats::Merger {
             for my $path (<$stats_dir/${proto}_${date}.*.json.gz>) {
                 printf "Reading %s\n", $path;
                 push @stats, FileHelper::read_json_gz($path);
+                Foostats::Privacy::validate_stats($stats[-1]);
                 @{ $stats[-1] }{qw(proto path)} = ($proto, $path);
             }
         }
@@ -1359,7 +1441,9 @@ $content
         my ($stats_dir, $output_dir, $html_output_dir, %merged) = @_;
         for my $date (sort { $b cmp $a } keys %merged) {
             my $stats = $merged{$date};
-            next unless $stats->{count};
+            # A fresh keyed dataset may not cover the full retained history.
+            # Keep existing aggregate pages for dates without private inputs.
+            next unless $stats->{count} && keys $stats->{count}->%*;
 
             my ($year, $month, $day) = $date =~ /(\d{4})(\d{2})(\d{2})/;
 
@@ -1816,17 +1900,21 @@ sub usage {
           --report                  Generate a report from the stats.
           --all                     Perform all of the above actions (parse, replicate, report).
           --stats-dir <path>        Directory to store stats files.
-                                    Default: /var/www/htdocs/buetow.org/self/foostats
+                                    Default: /var/db/foostats
+          --key-file <path>         Shared private HMAC key (hex, at least 32 bytes).
+                                    Default: /etc/foostats/ip-hmac.key
           --output-dir <path>       Directory to write .gmi report files.
                                     Default: /var/gemini/stats.foo.zone
           --html-output-dir <path>  Directory to write .html report files.
                                     Default: /var/www/htdocs/gemtexter/stats.foo.zone
           --odds-file <path>        File with odd URI patterns to filter.
-                                    Default: <stats-dir>/fooodds.txt
+                                    Default: /etc/foostats/fooodds.txt
           --filter-log <path>       Log file for filtered requests.
                                     Default: /var/log/fooodds
           --partner-node <hostname> Hostname of the partner node for replication.
                                     Default: fishfinger.buetow.org or blowfish.buetow.org
+          --partner-address <host>  Private rsync host/address, optionally with port.
+                                    Default: partner's WireGuard hostname
           --version                 Show version information.
           --help                    Show this help message.
         USAGE
@@ -1857,8 +1945,10 @@ sub foostats_main {
     my ($parse_logs, $replicate, $report, $all, $help, $version);
 
     # With default values
-    my $stats_dir = '/var/www/htdocs/buetow.org/self/foostats';
-    my $odds_file = $stats_dir . '/fooodds.txt';
+    my $stats_dir = '/var/db/foostats';
+    my $key_file  = '/etc/foostats/ip-hmac.key';
+    my $odds_file = '/etc/foostats/fooodds.txt';
+    my $partner_address;
     my $odds_log  = '/var/log/fooodds';
     my $output_dir;         # Will default to $stats_dir/gemtext if not specified
     my $html_output_dir;    # Will default to /var/www/htdocs/gemtexter/stats.foo.zone if not specified
@@ -1875,9 +1965,11 @@ sub foostats_main {
         'report!'           => \$report,
         'all!'              => \$all,
         'stats-dir=s'       => \$stats_dir,
+        'key-file=s'        => \$key_file,
         'output-dir=s'      => \$output_dir,
         'html-output-dir=s' => \$html_output_dir,
         'partner-node=s'    => \$partner_node,
+        'partner-address=s' => \$partner_address,
         'version'           => \$version,
         'help|?'            => \$help;
 
@@ -1888,8 +1980,11 @@ sub foostats_main {
 
     usage() if $help;
 
+    Foostats::Privacy::load_key($key_file) if $parse_logs or $replicate or $report or $all;
+    Foostats::FileOutputter->new(stats_dir => $stats_dir) if $parse_logs or $replicate or $report or $all;
+
     parse_logs($stats_dir, $odds_file, $odds_log)              if $parse_logs or $all;
-    Foostats::Replicator::replicate($stats_dir, $partner_node) if $replicate  or $all;
+    Foostats::Replicator::replicate($stats_dir, $partner_node, $partner_address) if $replicate or $all;
 
     # Set default output directories if not specified
     $output_dir      //= '/var/gemini/stats.foo.zone';
