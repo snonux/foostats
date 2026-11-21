@@ -15,7 +15,7 @@ no warnings qw(experimental::refaliasing);
 # Debugging aids like diagnostics are noisy in production.
 # Removed per review: enable locally when debugging only.
 
-use constant VERSION => 'v0.2.1';
+use constant VERSION => 'v0.2.2';
 
 # Package: FileHelper — small file/JSON helpers
 # - Purpose: Atomic writes, gzip JSON read/write, and line reading.
