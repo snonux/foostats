@@ -85,8 +85,26 @@ ok($listening, 'owned loopback rsync daemon is ready');
 BAIL_OUT('fixture daemon unavailable') unless $listening;
 my $remote = "rsync://127.0.0.1:$port/foostats-private/$peer_file";
 my $received = "$dir/private/$peer_file";
-Foostats::Replicator::replicate_file($remote, $received, 1);
-ok(-f $received, 'native rsync replicates an archive without public HTTP');
+
+# OpenBSD's cron runs /etc/daily with PATH=/bin:/sbin:/usr/bin:/usr/sbin,
+# while the rsync package lives in /usr/local/bin. Replication must not
+# depend on PATH: point the candidate list at this machine's rsync and run
+# with a PATH that contains no rsync at all (task 594).
+my ($fixture_rsync) = grep { -x } map { "$_/rsync" } split /:/, $ENV{PATH};
+mkdir "$dir/empty-path" or die $!;
+{
+    local $ENV{PATH} = "$dir/empty-path";
+    local @Foostats::Replicator::RSYNC_PATHS = ("$dir/empty-path/rsync", $fixture_rsync);
+    is(Foostats::Replicator::rsync_binary(), $fixture_rsync,
+       'first executable rsync candidate is chosen');
+    Foostats::Replicator::replicate_file($remote, $received, 1);
+}
+ok(-f $received, 'native rsync replicates an archive without public HTTP or rsync in PATH');
+{
+    local @Foostats::Replicator::RSYNC_PATHS = ("$dir/empty-path/rsync");
+    is(Foostats::Replicator::rsync_binary(), 'rsync',
+       'without an installed candidate the PATH lookup remains the fallback');
+}
 is((stat($received))[2] & 0777, 0640, 'replica retains private file mode');
 my $merged = Foostats::Merger::merge_for_date("$dir/private", $date);
 is($merged->{count}{web}, 2, 'both nodes contribute their requests');

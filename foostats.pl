@@ -604,6 +604,24 @@ package Foostats::Replicator {
     use File::Temp qw(tempfile);
     use String::Util qw(endswith);
 
+    # Absolute rsync locations, tried in order. OpenBSD's rsync package
+    # installs to /usr/local/bin, but cron runs /etc/daily (and therefore
+    # daily.local) with PATH=/bin:/sbin:/usr/bin:/usr/sbin. Calling bare
+    # "rsync" made every scheduled replication fail with "Can't exec" (task
+    # 594), so the binary is resolved without depending on PATH.
+    our @RSYNC_PATHS = qw(/usr/local/bin/rsync /usr/bin/rsync);
+
+    # Sub: rsync_binary
+    # - Purpose: Pick the first executable rsync from @RSYNC_PATHS.
+    # - Return: absolute path, or 'rsync' (PATH lookup) when none is installed
+    #   at a known location.
+    sub rsync_binary () {
+        for my $path (@RSYNC_PATHS) {
+            return $path if -f $path && -x _;
+        }
+        return 'rsync';
+    }
+
     # Sub: replicate
     # - Purpose: For each proto and last 31 days, replicate newest files.
     # - Params: $stats_dir (str) local dir; $partner_node (str) hostname.
@@ -648,7 +666,7 @@ package Foostats::Replicator {
 
         my ($fh, $temporary) = tempfile('.replica-XXXXXXXX', DIR => dirname($dest_path), UNLINK => 0);
         close $fh or die "Cannot close replication temporary file\n";
-        my $status = system('rsync', '-rt', '--timeout=30', '--contimeout=10', '--', $remote_url, $temporary);
+        my $status = system(rsync_binary(), '-rt', '--timeout=30', '--contimeout=10', '--', $remote_url, $temporary);
         if ($status != 0) {
             unlink $temporary or die "Cannot remove failed replication file\n";
             say "Partner statistics unavailable; retaining the previous local copy";
